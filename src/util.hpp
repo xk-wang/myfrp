@@ -22,6 +22,10 @@ using namespace std;
 #include "json.hpp"
 using namespace nlohmann::json;
 
+// 正常情况OK, 没数据处理NOTHING, IO错误IOERR, 对方关闭CLOSED, 缓冲区满BUFFER_FULL(读数据), 缓冲区空BUFFER_EMPTY(写数据), 再次尝试(内核缓冲区满，下次再写)
+enum RET_CODE { OK = 0, NOTHING = 1, IOERR = -1, CLOSED = -2, BUFFER_FULL = -3, BUFFER_EMPTY = -4, TRY_AGAIN };
+enum OP_TYPE { READ = 0, WRITE, ERROR }; // ERROR暂时没用到
+
 int parse_json(string& cfg_file){
     ifstream file(cfg_file);
     json configs;
@@ -63,34 +67,18 @@ void add_writefd(int epollfd, int fd){
     set_nonblocking(fd);
 }
 
+void modfd(int epollfd, int fd, int ev){
+    epoll_event event;
+    event.data.fd = fd;
+    event.events = ev | EPOLLET;
+    epoll_ctl(epollfd, EPOLL_CTL_MOD, fd, &event);
+}
+
 void close_fd(int epollfd, int fd){
     epoll_ctl(epollfd, EPOLL_CTL_DEL, fd, 0);
     close(fd);
+    fd=NULL;
 }
-
-int read_buffer(int fd, char* buffer, int length){
-    memset(buffer, '\0', length);
-    int bytes_read = recv(fd, buffer, length, 0);
-    if(bytes_read==-1 && errno!=AGAIN && errno!=EWOULDBLOCK){
-        perror("read fd error");
-        return -2; // -2代表IOERROR
-    }
-    return bytes_read;
-}
-
-int write_buffer(int fd, char* buffer, int length){
-    // 防止sigpipe信号中断进程
-    int bytes_write = send(fd, buffer, length, MSG_CONFIRM);
-    memset(buffer, '\0', length);
-    if(bytes_write==-1 && errno!=EAGAIN && errno!=EWOULDBLOCK && errno!=EPIPE){
-        perror("write fd error");
-        return -2;
-    }
-    if(errno==EAGAIN||errno==EWOULDBLOCK) return -1; // 不能发送了
-    if(errno==EPIPE) return 0; // 关闭连接 
-    return bytes_write; // 发送字节数
-}
-
 
 // 确定frpc和frps之间的通信格式如下：
 // 1.第一个字节：0表示frpc发送给frps的配置信息

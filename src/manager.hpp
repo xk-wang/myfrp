@@ -19,20 +19,25 @@ private:
     // 缓冲区
     static const int BIG_BUFFER_SIZE;
     static const int EVENTS_SIZE;
-    int fd1, fd2;
     char *forward_buffer, *backward_buffer;
     int forward_read_idx, forward_write_idx;
     int backward_read_idx, backward_write_idx;
+public:
     // 侦听
     int epollfd;
-    epoll_event* events;
-    // 状态
-    bool stop;
+    int fd1, fd2;
 public:
     Manager(int ffd1, ffd2);
     ~Manager();
     static void* start_routine(void* arg);
+
+    // socket读写
+    RET_CODE read_fd1();
+    RET_CODE write_fd1();
+    RET_CODE read_fd2();
+    RET_CODE write_fd2();
 }
+
 
 // 定义
 const int Manager::EVENTS_SIZE = 5;
@@ -40,103 +45,202 @@ const int Manager::BIG_BUFFER_SIZE = 65535;
 
 Manager::Manager(int ffd1, ffd2): fd1(ffd1), fd2(ffd2),
         forward_read_idx(0), forward_write_idx(0),
-        backward_read_idx(0), backward_write_idx(0),
-        stop(false){
+        backward_read_idx(0), backward_write_idx(0){
     forward_buffer = new char[BIG_BUFFER_SIZE];
     backward_buffer = new char[BIG_BUFFER_SIZE];
     epollfd = epoll_clt(1);
-    events = new epoll_event[EVENTS_SIZE];
 }
 
 Manager::~Manager(){
     delete []forward_buffer;
     delete []backward_buffer;
-    delete []events;
     close(fd1);
     close(fd2);
     close(epollfd);
 }
 
+// 每个manager结束之后可以在内部进行manager的资源回收
 void* Manager::start_routine(void* arg){
     Manager* manager = (Manager*)arg;
     int epollfd = manager->epollfd;
     int fd1 = manager->fd1, fd2 = manager->fd2;
-    epoll_event* events = manager->events; 
+    epoll_event events[EVENTS_SIZE]; 
     add_readfd(epollfd, fd1);
     add_readfd(epollfd, fd2);
 
     int ret, num;
+    bool stop=false;
     while(!stop){
         int ret = epoll_wait(epollfd, events, EVENTS_SIZE, -1);
         if(ret==-1){
             perror("epoll_wait failed!");
             exit(1);
         }
+        RET_CODE res;
         for(int i=0;i<ret;++i){
-            //从fd1端读取数据 缓冲区足够大，保证能通过循环读完
+            //读取fd1数据
             if(events[i].data.fd == fd1 && events[i].events | EPOLLIN){
-                if(forward_write_idx>=forward_read_idx) forward_write_idx=forward_read_idx=0;
-                while(forward_read_idx<BIG_BUFFER_SIZE){
-                    // 字节流不会被截断，边界会被忽略
-                    num = read_buffer(fd1, forward_buffer+forward_read_idx, BIG_BUFFER_SIZE-forward_read_idx);
-                    if(num==-1) break; // 读取完毕，需要退出
-                    else if(num>0) forward_read_idx+=num; // 正常读取
-                    else if(num==0||num==-2){ // fd1段关闭连接
-                        close_fd(epollfd, fd1);
-                        close_fd(epollfd, fd2);
+                res = manager->read_fd1();
+                switch(res){
+                    case OK:
+                    case BUFFER_FULL:{
+                        modfd(epollfd, fd2, EPOLLOUT);
+                        break;
+                    }
+                    case IOERR:
+                    case CLOSED:{
+                        //关闭连接交给了析构函数来执行
                         stop=true;
                         break;
                     }
+                    default:
+                        break;
                 }
-                if(!stop) add_writefd(epollfd, fd2);
             }
-            // 从fd2端读取数据
+            // 读取fd2数据
             else if(events[i].data.fd == fd2 && events[i].events | EPOLLIN){
-                if(backward_write_idx>=backward_read_idx) backward_write_idx=backward_read_idx=0;
-                while(backward_read_idx<BIG_BUFFER_SIZE){
-                    num = read_buffer(fd2, backward_buffer+backward_read_idx, BIG_BUFFER_SIZE-backward_read_idx);
-                    if(num==-1) break; // 读取完毕
-                    else if(num>0) backward_read_idx += num;
-                    else if(num==0||num==-2){
-                        close_fd(epollfd, fd1);
-                        close_fd(epollfd, fd2);
-                        stop = true;
+                res = manager->read_fd2();
+                switch(res){
+                    case OK:
+                    case BUFFER_FULL:{
+                        modfd(epollfd, fd1, EPOLLOUT);
                         break;
                     }
-                }
-                if(!stop) add_writefd(epollfd, fd1);
-            }
-            // 发送给fd1端 内核缓冲区不够用，循环不一定能发完
-            else if(events[i].data.fd == fd1 && events[i].events | EPOLLOUT){
-                while(backward_write_idx<backward_read_idx){
-                    num = write_buffer(fd1, backward_buffer+backward_write_idx, backward_read_idx-backward_write_idx);
-                    if(num==-1) break; // 停止发送
-                    else if(num>0) backward_write_idx += num;
-                    else if(num==0||num==-2){
-                        close_fd(epollfd, fd1);
-                        close_fd(epollfd, fd2);
+                    case IOERR:
+                    case CLOSED:{
                         stop=true;
                         break;
                     }
+                    default:
+                        break;
                 }
-                if(!stop) add_readfd(epollfd, fd2);
+            }
+            // 发送给fd1端
+            else if(events[i].data.fd == fd1 && events[i].events | EPOLLOUT){
+                res = manager->write_fd1();
+                switch(res){
+                    // 数据发送完毕 只改自己的状态为读侦听
+                    case BUFFER_EMPTY:{
+                        modfd(epollfd, fd1, EPOLLIN);
+                        break;
+                    }
+                    // 数据还没完全发送完毕
+                    case TRY_AGAIN:{
+                        modfd(epollfd, fd1, EPOLLOUT);
+                        break;
+                    }
+                    case IOERR:
+                    case CLOSED:{
+                        stop=true;
+                        break;
+                    }
+                    default:
+                        break;
+                }
             }
             // 发送给fd2端
             else if(events[i].data.fd == fd2 && events[i].events | EPOLLOUT){
-                while(forward_write_idx<forward_read_idx){
-                    num = write_buffer(fd2, forward_buffer+forward_write_idx, forward_read_idx-forward_write_idx);
-                    if(num==-1) break;
-                    else if(num>0) forward_write_idx  += num;
-                    else if(num==0||num==-2){
-                        close_fd(epollfd, fd1);
-                        close_fd(epollfd, fd2);
+                res = manager->write_fd2();
+                switch(res){
+                    case BUFFER_EMPTY:{
+                        modfd(epollfd, fd2, EPOLLIN);
+                        break;
+                    }
+                    case TRY_AGAIN:{
+                        modfd(epollfd, fd2, EPOLLOUT);
+                        break;
+                    }
+                    case IOERR:
+                    case CLOSED:{
                         stop=true;
                         break;
                     }
+                    default:
+                        break;
                 }
-                if(!stop) add_readfd(epollfd, fd1);
+            }
+            // 其他事件数据错误
+            else{
+                perror("the event is is not right");
+                stop=true;
             }
         }
     }
+    delete manager;
     return nullptr;
+}
+
+RET_CODE Manager::read_fd1(){
+    int bytes_read = 0;
+    while(true){
+        if(forward_read_idx>=BIG_BUFFER_SIZE){
+            return BUFFER_FULL;
+        }
+        bytes_read = recv(fd1, forward_buffer+foward_read_idx, BIG_BUFFER_SIZE-forward_read_idx, 0);
+        if(bytes_read==-1){
+            // 数据读完直接退出
+            if(errno==EAGAIN || errno==EWOULDBLOCK) break;
+            return IOERR;
+        }
+        else if(bytes_read==0) return CLOSED;
+        forward_read_idx+=bytes_read;
+    }
+    // 数据发送情况 有数据还是没数据
+    return (forward_read_idx-forward_write_idx>0)? OK: NOTHING;
+}
+
+RET_CODE Manager::read_fd2(){
+    int bytes_read = 0;
+    while(true){
+        if(backward_read_idx>=BIG_BUFFER_SIZE){
+            return BUFFER_FULL;
+        }
+        bytes_read = recv(fd2, backward_buffer+backward_read_idx, BIG_BUFFER_SIZE-backward_read_idx, 0);
+        if(bytes_read==-1){
+            // 内核没数据可读
+            if(errno==AGAIN || errno==EWOULDBLOCK) break;
+            return IOERR;
+        }
+        else if(bytes_read==0) return CLOSED;
+        backward_read_idx+=bytes_read;
+    }
+    return (backward_read_idx-backward_write_idx>0)? OK: NOTHING;
+}
+
+RET_CODE Manager::write_fd1(){
+    int bytes_write = 0;
+    while(true){
+        // 正常退出都是buffer_empty
+        if(backward_write_idx>=backward_read_idx){
+            backward_write_idx = backward_read_idx=0;
+            return BUFFER_EMPTY;
+        }
+        bytes_write = send(fd1, backward_buffer+backward_write_idx, backward_read_idx-backward_write_idx, 0);
+        if(bytes_write==-1){
+            // 内核没地方可写
+            if(errno==EAGAIN || errno==EWOULDBLOCK) return TRY_AGAIN;
+            return IOERR;
+        }
+        else if(bytes_write==0) return CLOSED;
+        backward_write_idx+=bytes_write;
+    }
+    return OK;
+}
+
+RET_CODE Manager::write_fd2(){
+    int bytes_write = 0;
+    while(true){
+        if(forward_write_idx>=forward_read_idx){
+            forward_write_idx=forward_read_idx=0;
+            return BUFFER_EMPTY;
+        }
+        bytes_write = send(fd2, forward_buffer+forward_write_idx, forward_read_idx-forward_write_idx, 0);
+        if(bytes_write==-1){
+            if(errno==EAGAIN || errno==EWOULDBLOCK) return TRY_AGAIN;
+            return IOERR;
+        }
+        else if(bytes_write==0) return CLOSED;
+        foward_write_idx+=bytes_write;
+    }
+    return OK;
 }
