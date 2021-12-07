@@ -32,7 +32,7 @@ int main(){
     local_addr.sin_family = AF_INET;
     // 这个输入是数值类型而非字符串
     // local_addr.sin_addr.s_addr = htonl("127.0.0.1");
-    inet_pton( AF_INET, "127.0.0.1", &local_addr.sin_addr );
+    inet_pton( AF_INET, "192.168.66.18", &local_addr.sin_addr );
     local_addr.sin_port = htons(22);
 
     int sockfd = socket(PF_INET, SOCK_STREAM, 0);

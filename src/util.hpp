@@ -70,6 +70,7 @@ void add_writefd(int epollfd, int fd){
 }
 
 void modfd(int epollfd, int fd, int ev){
+    cout << "chang the "<<fd<< " event" <<endl;
     epoll_event event;
     event.data.fd = fd;
     event.events = ev | EPOLLET;
