@@ -5,15 +5,14 @@
 #include <sys/epoll.h>
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <netinet/inet.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "util.hpp"
 
-// 此处的manager必须要设置joinable来保证由父进程回收缓冲区资源
-// 声明
+
 class Manager{
 private:
     // 缓冲区
@@ -27,7 +26,7 @@ public:
     int epollfd;
     int fd1, fd2;
 public:
-    Manager(int ffd1, ffd2);
+    Manager(int ffd1, int ffd2);
     ~Manager();
     static void* start_routine(void* arg);
 
@@ -36,19 +35,19 @@ public:
     RET_CODE write_fd1();
     RET_CODE read_fd2();
     RET_CODE write_fd2();
-}
+};
 
 
 // 定义
 const int Manager::EVENTS_SIZE = 5;
 const int Manager::BIG_BUFFER_SIZE = 65535;
 
-Manager::Manager(int ffd1, ffd2): fd1(ffd1), fd2(ffd2),
+Manager::Manager(int ffd1, int ffd2): fd1(ffd1), fd2(ffd2),
         forward_read_idx(0), forward_write_idx(0),
         backward_read_idx(0), backward_write_idx(0){
     forward_buffer = new char[BIG_BUFFER_SIZE];
     backward_buffer = new char[BIG_BUFFER_SIZE];
-    epollfd = epoll_clt(1);
+    epollfd = epoll_create(1);
 }
 
 Manager::~Manager(){
@@ -65,6 +64,7 @@ void* Manager::start_routine(void* arg){
     int epollfd = manager->epollfd;
     int fd1 = manager->fd1, fd2 = manager->fd2;
     epoll_event events[EVENTS_SIZE]; 
+    cout << fd1 << " " << fd2 << endl;
     add_readfd(epollfd, fd1);
     add_readfd(epollfd, fd2);
 
@@ -176,7 +176,7 @@ RET_CODE Manager::read_fd1(){
         if(forward_read_idx>=BIG_BUFFER_SIZE){
             return BUFFER_FULL;
         }
-        bytes_read = recv(fd1, forward_buffer+foward_read_idx, BIG_BUFFER_SIZE-forward_read_idx, 0);
+        bytes_read = recv(fd1, forward_buffer+forward_read_idx, BIG_BUFFER_SIZE-forward_read_idx, 0);
         if(bytes_read==-1){
             // 数据读完直接退出
             if(errno==EAGAIN || errno==EWOULDBLOCK) break;
@@ -198,7 +198,7 @@ RET_CODE Manager::read_fd2(){
         bytes_read = recv(fd2, backward_buffer+backward_read_idx, BIG_BUFFER_SIZE-backward_read_idx, 0);
         if(bytes_read==-1){
             // 内核没数据可读
-            if(errno==AGAIN || errno==EWOULDBLOCK) break;
+            if(errno==EAGAIN || errno==EWOULDBLOCK) break;
             return IOERR;
         }
         else if(bytes_read==0) return CLOSED;
@@ -240,7 +240,7 @@ RET_CODE Manager::write_fd2(){
             return IOERR;
         }
         else if(bytes_write==0) return CLOSED;
-        foward_write_idx+=bytes_write;
+        forward_write_idx+=bytes_write;
     }
     return OK;
 }

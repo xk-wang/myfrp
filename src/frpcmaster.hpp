@@ -5,7 +5,7 @@
 #include <sys/epoll.h>
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <netinet/inet.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
 #include <pthread.h>
 #include <stdio.h>

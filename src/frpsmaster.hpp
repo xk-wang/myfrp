@@ -5,7 +5,7 @@
 #include <sys/epoll.h>
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <netinet/inet.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -73,7 +73,7 @@ const int EVENTS_SIZE = 5;
 
 Master::Master(listen_port): port(listen_port), connection(-1), buffer_idx(0), conn_need(0){
     buffer = new char[BUFFER_SIZE];
-    epollfd = epoll_clt(1);
+    epollfd = epoll_create(1);
     events = new epoll_event[EVENTS_SIZE];
 }
 
@@ -130,6 +130,7 @@ RET_CODE Master::write_to_frpc(unsigned int num){
 void Master::start(){
     listen();
     length = sizeof(frpc_addr);
+    socklen_t socklen = sizeof(frpc_addr);
     int num;
     RET_CODE res;
     bool stop=false;
@@ -141,7 +142,7 @@ void Master::start(){
         }
         for(int i=0;i<num;++i){
             if(events[i].data.fd == listenfd && events[i].events | EPOLLIN){
-                int conn = accept(listenfd, (struct sockaddr*)&frpc_addr, &length);
+                int conn = accept(listenfd, (struct sockaddr*)&frpc_addr, &socklen);
                 if(conn==-1){
                     perror("accept failed!");
                     exit(1);
@@ -251,7 +252,7 @@ void Master::listen(){
         exit(1);
     }
     int opt=1;
-    setsockopt(listenfd, SOL_SOCKET, (const void*)&opt, sizeof(opt));
+    setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, (const void*)&opt, sizeof(opt));
 
     int ret=bind(listenfd, (struct sockaddr*)&addr, sizeof(addr));
     if(ret==-1){

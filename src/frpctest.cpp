@@ -2,35 +2,37 @@
 #include <fcntl.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
-#include <netinet/inet.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
 #include <stdio.h>
 #include <string.h>
+#include <pthread.h>
 
+#include "manager.hpp"
 #include "util.hpp"
 
-const int port = 2021;
-const int EVENTS_SIZE = 5;
-const int BUFFER_SIZE = 65535;
+#include <iostream>
+using namespace std;
 
-// 在本地启动一个server 建立和本地22端口的连接，充当本地转发器
+// 利用manager来进行通信管理，需要交付manger通信两端的connection
+// 本地只需要侦听listenfd，通信两端的连接交付给一个manager去侦听
 
 int main(){
-    int epollfd = epoll_clt(1);
+    const int EVENTS_SIZE = 5;
+    int epollfd = epoll_create(1);
     epoll_event events[EVENTS_SIZE];
-
-    char* forward_buffer = new char[BUFFER_SIZE];
-    char* backward_buffer = new char[BUFFER_SIZE];
-    int foward_read_idx=0, foward_write_idx=0;
-    int backward_read_idx=0, backward_write_idx=0;
+    int port=6996;
     
-    struct sockaddr_in local_addr, addr; // 本地22端口的地址和客户端连接地址
+    struct sockaddr_in local_addr, addr, client_addr; // 本地22端口的地址 侦听地址 客户端连接地址
     int length=sizeof(addr), ret, num;
+    socklen_t sock_len = sizeof(addr);
 
     // 建立和本地22端口的连接
     bzero(&local_addr, sizeof(local_addr));
     local_addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl("127.0.0.1");
+    // 这个输入是数值类型而非字符串
+    // local_addr.sin_addr.s_addr = htonl("127.0.0.1");
+    inet_pton( AF_INET, "127.0.0.1", &local_addr.sin_addr );
     local_addr.sin_port = htons(22);
 
     int sockfd = socket(PF_INET, SOCK_STREAM, 0);
@@ -38,13 +40,14 @@ int main(){
         perror("create socket failed!");
         exit(1);
     }
-    ret = connect(sockfd, (struct sockaddr*)&address, sizeof(address));
+    ret = connect(sockfd, (struct sockaddr*)&local_addr, sizeof(local_addr));
     if(ret!=0){
         perror("connect failed!");
         close(sockfd);
         exit(1);
     }
 
+    // 本地启动侦听
     bzero(&addr, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -56,9 +59,9 @@ int main(){
         exit(1);
     }
     int opt=1;
-    setsockopt(listenfd, SOL_SOCKET, (const void*)&opt, sizeof(opt));
+    setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, (const void*)&opt, sizeof(opt));
 
-    int ret=bind(listenfd, (struct sockaddr*)&addr, sizeof(addr));
+    ret=bind(listenfd, (struct sockaddr*)&addr, sizeof(addr));
     if(ret==-1){
         perror("bind failed!");
         exit(1);
@@ -70,9 +73,11 @@ int main(){
     }
     add_readfd(epollfd, listenfd);
 
-    int conn;
     bool stop=false;
+    Manager* manager;
+    int client_conn=-1, conn;
     while(!stop){
+        cout << "the frpc listening at port: " << port << endl;
         num = epoll_wait(epollfd, events, EVENTS_SIZE, -1);
         if(num==-1){
             perror("epoll_wait failed!");
@@ -80,51 +85,31 @@ int main(){
         }
         for(int i=0;i<num;++i){
             if(events[i].data.fd==listenfd && events[i].events | EPOLLIN){
-                conn = accpet(listenfd, (struct sockaddr*)&addr, &length);
+                conn = accept(listenfd, (struct sockaddr*)&client_addr, &sock_len);
                 if(conn==-1){
                     perror("accept failed!");
                     exit(1);
                 }
-                add_readfd(epollfd, conn);
-            }
-            // 读取客户端字节流
-            else if(events[i].data.fd==conn && events[i].events | EPOLLIN){
-                if(forward_write_idx>=forward_read_idx) forward_write_idx=forward_read_idx=0;
-                while(forward_read_idx<BUFFER_SIZE){
-                    ret = read_buffer(conn, forward_buffer+forward_read_idx, BUFFER_SIZE-forward_read_idx);
-                    if(ret==-1) break; // 读取完毕，退出
-                    else if(ret>0) forward_read_idx+=ret;
-                    else if(ret==0||ret==-2){
-                        close_fd(epollfd, conn);
-                        close_fd(epollfd, listenfd);
-                        stop=true;
-                        break;
-                    }
+                if(client_conn!=-1){
+                    cout << "only allow one client!" << endl;
+                }else{
+                    client_conn = conn;
+                    cout << "begin create a manager" << endl;
+                    cout << client_conn << " " << sockfd << endl;
+                    manager=new Manager(client_conn, sockfd);
+                    cout << "the manger created" << endl;
+                    Manager::start_routine(manager);
+                    stop=true;
                 }
-                if(!stop) add_writefd(epollfd, sockfd);
             }
-            // 发送给sshd端口
-            else if(events[i].data.fd==sockfd && events[i].events | EPOLLOUT){
-                while(forward_write_idx<forward_read_idx){
-                    ret = write_buffer(sockfd, forward_buffer+forward_write_idx, forward_read_idx-forward_write_idx);
-                    if(ret==-1) break; //停止发送
-                    else if(num>0) forward_write_idx+=ret;
-                    else if(num==0||num==-2){
-                        close_fd(epollfd, conn);
-                        close_fd(epollfd, listenfd);
-                        stop=true;
-                        break;
-                    }
-                }
-                // 下一步需要从sockfd来读
-                if(!stop) add_readfd(epollfd, sockfd);
-            }
-            // 读取sockfd的数据
-            else if(events[i].data.fd==sockfd && events[i].events | EPOLLIN){
-                if(backward_read_idx<)
+            // 其他情况则出错
+            else{
+                cout << "this situation should not be appeared!" << endl;
+                stop = true;
             }
         }
     }
-    
+
+    close(listenfd);    
     return 0;
 }
