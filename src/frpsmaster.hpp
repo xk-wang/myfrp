@@ -16,7 +16,6 @@
 
 #include <iostream>
 #include <queue>
-#include <unordered_map>
 using namespace std;
 
 // 描述frps主线程处理的事情，包含port侦听、与frpc通信开启remote_port、
@@ -25,6 +24,8 @@ using namespace std;
 
 class Master{
 private:
+    // 也需要设计两个缓冲区，现在一个缓冲区每次读写之前需要进行memset需要消息一次发送
+    // 并不合理
     // 缓冲区
     static const int BUFFER_SIZE;
     static const int EVENTS_SIZE;
@@ -35,62 +36,65 @@ private:
     int port;
     int listenfd, connection; // 和frpc的主连接 需要关闭的资源
     struct sockaddr_in addr, frpc_addr;
-    int length;
+    socklen_t length;
 
     // 服务socket相关
-    int serv_port;
+    short serv_port;
     int serv_listenfd; // 需要关闭的资源
-    struct sockadr_in serv_addr, client_addr;
+    struct sockaddr_in serv_addr, client_addr;
     int serv_length;
 
     //epoll侦听
     int epollfd;
-    epoll_event* events;
 
     // 连接管理
     queue<int>clients;
     queue<int>frpcs;
 
     // 功能
-    void listen();
-    void service_listen(int service_port);
+    void Listen();
+    void service_listen(short service_port);
     void connection_request();
 
     // 读写缓冲
     RET_CODE read_from_frpc();
-    RET_CODE write_to_frpc(unsigned int);
+    RET_CODE write_to_frpc();
+    RET_CODE write_to_buffer(int num);
+    short read_from_buffer();
 
     // 需要的连接数
     unsigned int conn_need;
 public:
-    Master(int port);
+    Master(int listen_port);
     ~Master();
     void start();
-}
+};
 
-const int BUFFER_SIZE = 512;
-const int EVENTS_SIZE = 5;
+const int Master::BUFFER_SIZE = 512;
+const int Master::EVENTS_SIZE = 5;
 
-Master::Master(listen_port): port(listen_port), connection(-1), buffer_idx(0), conn_need(0){
+Master::Master(int listen_port): port(listen_port), connection(-1), buffer_idx(0), conn_need(0){
     buffer = new char[BUFFER_SIZE];
     epollfd = epoll_create(1);
-    events = new epoll_event[EVENTS_SIZE];
+
 }
 
 Master::~Master(){
     delete []buffer;
-    delete []events;
     close(epollfd);
     close(listenfd);
     close(serv_listenfd);
 }
 
+// frps和frpc只有两种类型的交互, 向frps发配置文件，向frpc发请求
+// 每次交互必须要先完成才能进行之后的动作
+
+// 读取配置文件只会发送一次(仅仅是发送一个端口号)
 RET_CODE Master::read_from_frpc(){
-    // 缓冲区复用 每次读之前需要清空缓冲区
+    buffer_idx = 0;
     memset(buffer, '\0', BUFFER_SIZE);
     int bytes_read = 0;
     while(true){
-        // 出现这种情况需要报错 每次读缓冲区是全部空闲一定够用
         if(buffer_idx>=BUFFER_SIZE){
             return BUFFER_FULL;
         }
@@ -102,23 +106,24 @@ RET_CODE Master::read_from_frpc(){
         else if(bytes_read==0) return CLOSED;
         buffer_idx+=bytes_read;
     }
-    return (buffer_idx>0)? buffer_idx=0, OK: NOTHING;
+    return (buffer_idx>0)?buffer_idx=0, OK: NOTHING;
 }
 
-RET_CODE Master::write_to_frpc(unsigned int num){
-    // 每次发送一个字节，不能成功下次接着继续
-    int length = sizeof(num);
-    memset(buffer, '\0', BUFFER_SIZE);
-    *((unsigned int*)buffer)=num;
-    int bytes_write = 0;
+// 发送一个int
+RET_CODE Master::write_to_frpc(){
+    int bytes_write = 0, length = sizeof(int);
+    buffer_idx = 0;
     while(true){
         if(buffer_idx>=length){
-            buffer_idx=0;
+            buffer_idx = 0;
+            memset(buffer, '\0', BUFFER_SIZE);
             return BUFFER_EMPTY;
         }
         bytes_write = send(connection, buffer+buffer_idx, length-buffer_idx, 0);
         if(bytes_write==-1){
-            if(errno==AGAIN || errno==EWOULDBLOCK) return TRY_AGAIN;
+            if(errno==EAGAIN || errno==EWOULDBLOCK){
+                return TRY_AGAIN;
+            }
             return IOERR;
         }
         else if(bytes_write==0) return CLOSED;
@@ -127,13 +132,30 @@ RET_CODE Master::write_to_frpc(unsigned int num){
     return OK;
 }
 
+// 如果不能放下一个int需要报错
+RET_CODE Master::write_to_buffer(int num){
+    if(BUFFER_SIZE<sizeof(num)){
+        return BUFFER_FULL;
+    }
+    memset(buffer, '\0', BUFFER_SIZE);
+    *((int*)buffer)=num;
+    return OK;
+}
+
+short Master::read_from_buffer(){
+    short port = *((short*)buffer);
+    memset(buffer, '\0', BUFFER_SIZE);
+    return port;
+}
+
 void Master::start(){
-    listen();
+    Listen();
     length = sizeof(frpc_addr);
     socklen_t socklen = sizeof(frpc_addr);
     int num;
     RET_CODE res;
     bool stop=false;
+    epoll_event events[EVENTS_SIZE];
     while(!stop){
         num = epoll_wait(epollfd, events, EVENTS_SIZE, -1);
         if(num==-1){
@@ -141,7 +163,7 @@ void Master::start(){
             exit(1);
         }
         for(int i=0;i<num;++i){
-            if(events[i].data.fd == listenfd && events[i].events | EPOLLIN){
+            if(events[i].data.fd == listenfd && (events[i].events & EPOLLIN)){
                 int conn = accept(listenfd, (struct sockaddr*)&frpc_addr, &socklen);
                 if(conn==-1){
                     perror("accept failed!");
@@ -156,8 +178,8 @@ void Master::start(){
                 }
             }
             // client连接
-            else if(events[i].data.fd == serv_listenfd && events[i].events | EPOLLIN){
-                int client_fd = accpet(serv_listenfd, (struct sockaddr*)&client_addr, &length);
+            else if(events[i].data.fd == serv_listenfd && (events[i].events & EPOLLIN)){
+                int client_fd = accept(serv_listenfd, (struct sockaddr*)&client_addr, &length);
                 if(client_fd==-1){
                     perror("accept serv failed!");
                     exit(1);
@@ -168,54 +190,64 @@ void Master::start(){
                 ++conn_need;
             }
             // 读取frpc发送的配置数据 目前只启动一个服务（端口）
-            else if(events[i].data.fd == connection && events[i].events | EPOLLIN){
+            else if(events[i].data.fd == connection && (events[i].events & EPOLLIN)){
                 res = read_from_frpc();
                 switch(res){
                     case BUFFER_FULL:{
-                        perror("the buffer is not enough!");
+                        cout << "the buffer is not enough!" << endl;
                         stop=true;
-                        break;
+                        continue;
                     }
                     case IOERR:
-                    case CLOSED:{
+                    case CLOSED:
+                    case NOTHING: {
                         // 需要去关闭启动的服务和相关连接
                         close_fd(epollfd, serv_listenfd);
                         close_fd(epollfd, connection);
-                        perror("the frpc closed or error!");
+                        cout << "the frpc closed or error or send nothing!" << endl;
                         break;
                     }
                     default:
                         break;
                 }
-                serv_port = *((short*)buffer);
+                serv_port = read_from_buffer();
                 service_listen(serv_port);
             }
             // frps请求frpc发起请求
-            else if(events[i].data.fd == connection && events[i].events | EPOLLOUT){
-                res = write_to_frpc(conn_need); // 每次需要发送一个unsigned int来代表需要的连接数
-                // 必须要发送成功
-                while(res==TRY_AGAIN){
-                    res = write_to_frpc(conn_need);
+            else if(events[i].data.fd == connection && (events[i].events & EPOLLOUT)){
+                if(conn_need<=0){
+                    cout << "the conn_need is not positive" << endl;
+                    modfd(epollfd, connection, EPOLLIN);
+                    continue;
                 }
-                conn_need = 0；
+                res = write_to_buffer(conn_need);
+                if(res==BUFFER_FULL){
+                    cout << "the buffer is not enough" << endl;
+                    stop=true;
+                    continue;
+                }
+                res = write_to_frpc(); // 每次需要发送一个unsigned int来代表需要的连接数
                 switch(res){
                     case IOERR:
-                    case CLOSED:{
+                    case CLOSED:
+                    case TRY_AGAIN:{
                         close_fd(epollfd, serv_listenfd);
                         close_fd(epollfd, connection);
-                        perror("the frpc closed or error!");
+                        cout << "the frpc closed or error or the kernel is not enough to write!" << endl;
                         break;
                     }
                     default:
                         break;
                 }
+                conn_need = 0;
+                modfd(epollfd, connection, EPOLLIN);
             }
         }
 
         // 分配子线程来服务， 设置分离态线程
         pthread_t tid;
         if(frpcs.size()>clients.size()){
-            perror("the frpc connection is greater than client connection!");
+            cout << "the frpc connection is greater than client connection!" <<endl;
             stop=true;
             continue;
         }
@@ -224,7 +256,7 @@ void Master::start(){
             frpcs.pop();
             clients.pop();
             Manager* manager = new Manager(client_conn, frpc_conn);
-            ret=pthread_create(&tid, nullptr, Manager::start_routine, (void*)manager);
+            int ret=pthread_create(&tid, nullptr, Manager::start_routine, (void*)manager);
             if(ret!=0){
                 perror("pthread_create failed!");
                 exit(1);
@@ -240,7 +272,7 @@ void Master::start(){
     }
 }
 
-void Master::listen(){
+void Master::Listen(){
     bzero(&addr, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -268,7 +300,7 @@ void Master::listen(){
 }
 
 // 如果请求该服务的frpc关闭，那么这项服务的侦听是否需要关闭？
-void Master::service_listen(int service_port){
+void Master::service_listen(short service_port){
     bzero(&serv_addr, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -285,5 +317,5 @@ void Master::service_listen(int service_port){
         perror("bind service port failed!");
         exit(1);
     }
-    add_readfd(serv_listenfd);  
+    add_readfd(epollfd ,serv_listenfd);  
 }

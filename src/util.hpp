@@ -27,12 +27,12 @@ using nlohmann::json;
 enum RET_CODE { OK = 0, NOTHING = 1, IOERR = -1, CLOSED = -2, BUFFER_FULL = -3, BUFFER_EMPTY = -4, TRY_AGAIN };
 enum OP_TYPE { READ = 0, WRITE, ERROR }; // ERROR暂时没用到
 
-int parse_json(string& cfg_file){
-    ifstream file(cfg_file);
-    json configs;
-    file >> configs;
-    int port = configs["bind_port"];
-    return port;
+string parse_args(int argc, char* argv[]) {
+    cmdline::parser parser;
+    parser.add<string>("cfg_file", 'c', "the config file path", false, "");
+    parser.parse_check(argc, argv);
+    string cfg_file = parser.get<string>("cfg_file");
+    return cfg_file;
 }
 
 json deserialization_json(char* origin_str){

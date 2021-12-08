@@ -12,7 +12,6 @@
 
 #include "util.hpp"
 
-
 class Manager{
 private:
     // 缓冲区
@@ -39,7 +38,7 @@ public:
 
 // 定义
 const int Manager::EVENTS_SIZE = 5;
-const int Manager::BIG_BUFFER_SIZE = 65535;
+const int Manager::BIG_BUFFER_SIZE = 512;
 
 Manager::Manager(int ffd1, int ffd2): fd1(ffd1), fd2(ffd2),
         forward_read_idx(0), forward_write_idx(0),
