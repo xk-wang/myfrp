@@ -37,7 +37,6 @@ public:
     RET_CODE write_fd2();
 };
 
-
 // 定义
 const int Manager::EVENTS_SIZE = 5;
 const int Manager::BIG_BUFFER_SIZE = 65535;
@@ -64,17 +63,15 @@ void* Manager::start_routine(void* arg){
     int epollfd = manager->epollfd;
     int fd1 = manager->fd1, fd2 = manager->fd2;
     epoll_event events[EVENTS_SIZE]; 
-    cout << fd1 << " " << fd2 << endl;
     add_readfd(epollfd, fd1);
     add_readfd(epollfd, fd2);
-    // add_writefd(epollfd, fd1);
-    // add_writefd(epollfd, fd2);
 
+    // add_readf和modfd都是会覆盖以前的操作，不同的是add_readfd和add_writefd是
+    // 初次使用调用EPOLL_CTL_ADD，modfd是进行侦听文件描述符的修改EPOLL_CTL_MOD
     int ret, num;
     bool stop=false;
     while(!stop){
         int ret = epoll_wait(epollfd, events, EVENTS_SIZE, -1);
-        cout << "the events coming, num: " << ret << endl;
         if(ret==-1){
             perror("epoll_wait failed!");
             exit(1);
@@ -82,15 +79,12 @@ void* Manager::start_routine(void* arg){
         RET_CODE res;
         for(int i=0;i<ret;++i){
             //读取fd1数据
-            if(events[i].data.fd == fd1 && events[i].events | EPOLLIN){
+            if(events[i].data.fd == fd1 && (events[i].events & EPOLLIN)){
                 res = manager->read_fd1();
-                cout << "read from client res: " << res << endl;
                 switch(res){
                     case OK:
                     case BUFFER_FULL:{
-                        cout << "prepare to write to sshd" << endl;
-                        res = manager->write_fd2();
-                        // modfd(epollfd, fd2, EPOLLOUT);
+                        modfd(epollfd, fd2, EPOLLOUT);
                         break;
                     }
                     case IOERR:
@@ -104,15 +98,12 @@ void* Manager::start_routine(void* arg){
                 }
             }
             // 读取fd2数据
-            else if(events[i].data.fd == fd2 && events[i].events | EPOLLIN){
+            else if(events[i].data.fd == fd2 && (events[i].events & EPOLLIN)){
                 res = manager->read_fd2();
-                cout << "read from sshd res: " << res << endl;
                 switch(res){
                     case OK:
                     case BUFFER_FULL:{
-                        cout << "prepare to write to client" << endl;
-                        res = manager->write_fd1();
-                        // modfd(epollfd, fd1, EPOLLOUT);
+                        modfd(epollfd, fd1, EPOLLOUT);
                         break;
                     }
                     case IOERR:
@@ -125,14 +116,12 @@ void* Manager::start_routine(void* arg){
                 }
             }
             // 发送给fd1端
-            else if(events[i].data.fd == fd1 && events[i].events | EPOLLOUT){
-                cout << "send to client" << endl;
+            else if(events[i].data.fd == fd1 && (events[i].events & EPOLLOUT)){
                 res = manager->write_fd1();
                 switch(res){
                     // 数据发送完毕 只改自己的状态为读侦听
                     case BUFFER_EMPTY:{
                         modfd(epollfd, fd1, EPOLLIN);
-                        modfd(epollfd, fd2, EPOLLIN);
                         break;
                     }
                     // 数据还没完全发送完毕
@@ -150,12 +139,10 @@ void* Manager::start_routine(void* arg){
                 }
             }
             // 发送给fd2端
-            else if(events[i].data.fd == fd2 && events[i].events | EPOLLOUT){
-                cout << "send to server" << endl;
+            else if(events[i].data.fd == fd2 && (events[i].events & EPOLLOUT)){
                 res = manager->write_fd2();
                 switch(res){
                     case BUFFER_EMPTY:{
-                        modfd(epollfd, fd1, EPOLLIN);
                         modfd(epollfd, fd2, EPOLLIN);
                         break;
                     }
@@ -183,33 +170,6 @@ void* Manager::start_routine(void* arg){
     return nullptr;
 }
 
-// RET_CODE Manager::read_fd1(){
-//     int bytes_read = 0;
-//     while(true){
-//         if(forward_read_idx>=BIG_BUFFER_SIZE){
-//             cout << "forward buffer full" << endl;
-//             return BUFFER_FULL;
-//         }
-//         cout << "the forward_read_idx: " << forward_read_idx << endl;
-//         cout << "the client is: " << fd1 << endl;
-//         bytes_read = recv(fd1, forward_buffer+forward_read_idx, BIG_BUFFER_SIZE-forward_read_idx, 0);
-//         cout << "bytes_read: " << bytes_read << endl;
-//         if(bytes_read==-1){
-//             // 数据读完直接退出
-//             if(errno==EAGAIN || errno==EWOULDBLOCK){
-//                 cout << "read forward buffer complete" << endl;
-//                 break;
-//             }
-//             return IOERR;
-//         }
-//         else if(bytes_read==0) return CLOSED;
-//         forward_read_idx+=bytes_read;
-//         cout << "forward_read_idx: " << forward_read_idx << endl;
-//     }
-//     // 数据发送情况 有数据还是没数据
-//     return (forward_read_idx-forward_write_idx>0)? OK: NOTHING;
-// }
-
 RET_CODE Manager::read_fd1(){
     int bytes_read = 0;
     while(true){
@@ -217,7 +177,6 @@ RET_CODE Manager::read_fd1(){
             return BUFFER_FULL;
         }
         bytes_read = recv(fd1, forward_buffer+forward_read_idx, BIG_BUFFER_SIZE-forward_read_idx, 0);
-        cout << "bytes_read: " << bytes_read << endl;
         if(bytes_read==-1){
             // 内核没数据可读
             if(errno==EAGAIN || errno==EWOULDBLOCK) break;
@@ -236,7 +195,6 @@ RET_CODE Manager::read_fd2(){
             return BUFFER_FULL;
         }
         bytes_read = recv(fd2, backward_buffer+backward_read_idx, BIG_BUFFER_SIZE-backward_read_idx, 0);
-        // cout << "bytes_read: " << bytes_read << endl;
         if(bytes_read==-1){
             // 内核没数据可读
             if(errno==EAGAIN || errno==EWOULDBLOCK) break;

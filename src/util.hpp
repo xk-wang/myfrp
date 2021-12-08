@@ -52,12 +52,13 @@ int set_nonblocking(int fd){
     return old_option;
 }
 
+// 这个是将之前的侦听进行了覆盖
+// modfd基本上是一样的
 void add_readfd(int epollfd, int fd){
     epoll_event event;
     event.data.fd = fd;
     event.events = EPOLLIN | EPOLLET;
     epoll_ctl(epollfd, EPOLL_CTL_ADD, fd, &event);
-    cout << "add readfd" << endl;
     set_nonblocking(fd);
 }
 
@@ -70,7 +71,6 @@ void add_writefd(int epollfd, int fd){
 }
 
 void modfd(int epollfd, int fd, int ev){
-    cout << "chang the "<<fd<< " event" <<endl;
     epoll_event event;
     event.data.fd = fd;
     event.events = ev | EPOLLET;

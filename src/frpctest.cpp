@@ -94,10 +94,7 @@ int main(){
                     cout << "only allow one client!" << endl;
                 }else{
                     client_conn = conn;
-                    cout << "begin create a manager" << endl;
-                    cout << client_conn << " " << sockfd << endl;
                     manager=new Manager(client_conn, sockfd);
-                    cout << "the manger created" << endl;
                     Manager::start_routine(manager);
                     stop=true;
                 }
