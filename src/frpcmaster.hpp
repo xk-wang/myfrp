@@ -77,7 +77,8 @@ Master::Master(const string& serv_ip, short serv_port, short port1, short port2)
 
     bzero(&local, sizeof(local));
     local.sin_family = AF_INET;
-    inet_pton(AF_INET, "0.0.0.0", &local.sin_addr);
+    local.sin_addr.s_addr = htonl(INADDR_ANY);
+    // inet_pton(AF_INET, "192.168.66.18", &local.sin_addr);
     local.sin_port = htons(local_port);
 }
 
@@ -133,7 +134,6 @@ void Master::start(){
             }
         }
     }
-
 }
 
 void Master::Connect(){
@@ -160,10 +160,14 @@ int Master::send_port(){
     }
     res = write_to_frps();
     switch(res){
-        case IOERR:
-        case CLOSED:
+        case IOERR:{
+            cout << "the frps error" << endl;
+        }
+        case CLOSED:{
+            cout << "the frps closed" << endl;
+        }
         case TRY_AGAIN:{
-            cout << "the frps closed or error or the kernel is not enough to send remote_port" << endl;
+            cout << "the kernel is not enough to send remote_port" << endl;
             return -1;
         }
         default:
@@ -175,10 +179,14 @@ int Master::send_port(){
 int Master::conn_need(){
     RET_CODE res = read_from_frps();
     switch(res){
-        case BUFFER_FULL:
-        case IOERR:
+        case BUFFER_FULL:{
+            cout << "the buffer is not enough to read" << endl;
+        }
+        case IOERR:{
+            cout << "the frps error" << endl;
+        }
         case CLOSED:{
-            cout << "the buffer is not enough to read or the frps closed or error" << endl;
+            cout << "the frps closed" << endl;
             return -1;
         }
         default:

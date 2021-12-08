@@ -12,6 +12,10 @@ using nlohmann::json;
 
 int parse_json(const string& cfg_file){
     ifstream file(cfg_file);
+    if(!file){
+        cout << "the config path: " << cfg_file << " does not exists" << endl;
+        exit(1);
+    }
     json configs;
     file >> configs;
     int port = configs["bind_port"];

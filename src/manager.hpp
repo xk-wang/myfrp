@@ -64,6 +64,7 @@ void* Manager::start_routine(void* arg){
     epoll_event events[EVENTS_SIZE]; 
     add_readfd(epollfd, fd1);
     add_readfd(epollfd, fd2);
+    cout << "client: " << fd1 << " frpc: " << fd2 << endl;
 
     // add_readf和modfd都是会覆盖以前的操作，不同的是add_readfd和add_writefd是
     // 初次使用调用EPOLL_CTL_ADD，modfd是进行侦听文件描述符的修改EPOLL_CTL_MOD
@@ -75,11 +76,13 @@ void* Manager::start_routine(void* arg){
             perror("epoll_wait failed!");
             exit(1);
         }
+        // cout << "=====the events comming=====" << endl;
         RET_CODE res;
         for(int i=0;i<ret;++i){
             //读取fd1数据
             if(events[i].data.fd == fd1 && (events[i].events & EPOLLIN)){
                 res = manager->read_fd1();
+                cout << "read from client: " << fd1 << endl;
                 switch(res){
                     case OK:
                     case BUFFER_FULL:{
@@ -99,6 +102,7 @@ void* Manager::start_routine(void* arg){
             // 读取fd2数据
             else if(events[i].data.fd == fd2 && (events[i].events & EPOLLIN)){
                 res = manager->read_fd2();
+                cout << "read from frpc: " << fd2 << endl;
                 switch(res){
                     case OK:
                     case BUFFER_FULL:{
@@ -117,6 +121,7 @@ void* Manager::start_routine(void* arg){
             // 发送给fd1端
             else if(events[i].data.fd == fd1 && (events[i].events & EPOLLOUT)){
                 res = manager->write_fd1();
+                cout << "write from client: " << fd1 << endl;
                 switch(res){
                     // 数据发送完毕 只改自己的状态为读侦听
                     case BUFFER_EMPTY:{
@@ -140,6 +145,7 @@ void* Manager::start_routine(void* arg){
             // 发送给fd2端
             else if(events[i].data.fd == fd2 && (events[i].events & EPOLLOUT)){
                 res = manager->write_fd2();
+                cout << "write from frpc: " << fd2 << endl;
                 switch(res){
                     case BUFFER_EMPTY:{
                         modfd(epollfd, fd2, EPOLLIN);

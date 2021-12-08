@@ -171,9 +171,11 @@ void Master::start(){
                 }
                 // connection还没赋值则构建frpc和frps的主连接
                 if(connection==-1){
+                    cout << "frpc connect" << endl;
                     connection = conn;
                     add_readfd(epollfd, connection);
                 }else{ // 是frpc的给其他服务的连接
+                    cout << "get conn for service" << endl;
                     frpcs.push(conn);
                 }
             }
@@ -184,10 +186,12 @@ void Master::start(){
                     perror("accept serv failed!");
                     exit(1);
                 }
+                cout << "client: " << client_fd << " connect" << endl;
                 clients.push(client_fd);
                 // 准备发数据给frpc
                 modfd(epollfd, connection, EPOLLOUT);
                 ++conn_need;
+                cout << "the conn_need: " << conn_need << endl;
             }
             // 读取frpc发送的配置数据 目前只启动一个服务（端口）
             else if(events[i].data.fd == connection && (events[i].events & EPOLLIN)){
@@ -198,13 +202,17 @@ void Master::start(){
                         stop=true;
                         continue;
                     }
-                    case IOERR:
-                    case CLOSED:
+                    case IOERR:{
+                        cout << "the frpc error!" << endl;
+                    }
+                    case CLOSED:{
+                        cout << "the frpc closed!" << endl;
+                    }
                     case NOTHING: {
                         // 需要去关闭启动的服务和相关连接
                         close_fd(epollfd, serv_listenfd);
                         close_fd(epollfd, connection);
-                        cout << "the frpc closed or error or send nothing!" << endl;
+                        cout << "the frpc send nothing!" << endl;
                         break;
                     }
                     default:
@@ -212,6 +220,7 @@ void Master::start(){
                 }
                 serv_port = read_from_buffer();
                 service_listen(serv_port);
+                cout << "start service at port: " << serv_port << endl;
             }
             // frps请求frpc发起请求
             else if(events[i].data.fd == connection && (events[i].events & EPOLLOUT)){
@@ -241,11 +250,14 @@ void Master::start(){
                 }
                 conn_need = 0;
                 modfd(epollfd, connection, EPOLLIN);
+                cout << "already write the need connection to frpc" << endl;
             }
         }
 
         // 分配子线程来服务， 设置分离态线程
         pthread_t tid;
+        // cout << "the frpc size: " << frpcs.size() << endl 
+        //      << "the clients size: " << clients.size() << endl;
         if(frpcs.size()>clients.size()){
             cout << "the frpc connection is greater than client connection!" <<endl;
             stop=true;
@@ -275,6 +287,7 @@ void Master::start(){
 void Master::Listen(){
     bzero(&addr, sizeof(addr));
     addr.sin_family = AF_INET;
+    // inet_pton(AF_INET, "192.168.66.16", &addr.sin_addr);
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(port);
 
@@ -296,6 +309,7 @@ void Master::Listen(){
         perror("listen failed!");
         exit(1);
     }
+    cout << "the frps listening: " << port << endl;
     add_readfd(epollfd, listenfd);
 }
 
@@ -303,6 +317,7 @@ void Master::Listen(){
 void Master::service_listen(short service_port){
     bzero(&serv_addr, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
+    // inet_pton(AF_INET, "192.168.66.16", &serv_addr.sin_addr);
     serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
     serv_addr.sin_port = htons(service_port);
 
@@ -311,11 +326,19 @@ void Master::service_listen(short service_port){
         perror("create serv listen socket failed!");
         exit(1);
     }
+    int opt=1;
+    setsockopt(serv_listenfd, SOL_SOCKET, SO_REUSEADDR, (const void*)&opt, sizeof(opt));
     
     int ret=bind(serv_listenfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
     if(ret==-1){
         perror("bind service port failed!");
         exit(1);
     }
+    ret = listen(serv_listenfd, 5);
+    if(ret==-1){
+        perror("listen failed!");
+        exit(1);
+    }
+    cout << "the service at: " << port << " listening" << endl;
     add_readfd(epollfd ,serv_listenfd);  
 }
