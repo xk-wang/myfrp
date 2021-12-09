@@ -116,6 +116,7 @@ void Master::start(){
                     stop = true;
                     break;
                 }
+                cout << "the conn needed by frps" << res << endl;
                 // 创建线程来管理转发任务
                 for(int i=0;i<res;++i){
                     arrange_new_pair(local_conn, remote_conn);
@@ -131,6 +132,8 @@ void Master::start(){
                         exit(1);
                     }
                 }
+                // 不行这个后续好像没法继续监听读事件
+                modfd(epollfd, connection, EPOLLIN);
             }
         }
     }
@@ -268,7 +271,8 @@ RET_CODE Master::write_to_frps(){
             memset(buffer, '\0', BUFFER_SIZE);
             return BUFFER_EMPTY;
         }
-        bytes_write = send(connection, buffer+buffer_idx, length-buffer_idx, 0);
+        // 防止连接关闭去写导致程序崩溃
+        bytes_write = send(connection, buffer+buffer_idx, length-buffer_idx, MSG_NOSIGNAL);
         if(bytes_write==-1){
             if(errno==EAGAIN || errno==EWOULDBLOCK){
                 return TRY_AGAIN;

@@ -119,7 +119,8 @@ RET_CODE Master::write_to_frpc(){
             memset(buffer, '\0', BUFFER_SIZE);
             return BUFFER_EMPTY;
         }
-        bytes_write = send(connection, buffer+buffer_idx, length-buffer_idx, 0);
+        // 防止连接关闭程序发生崩溃
+        bytes_write = send(connection, buffer+buffer_idx, length-buffer_idx, MSG_NOSIGNAL);
         if(bytes_write==-1){
             if(errno==EAGAIN || errno==EWOULDBLOCK){
                 return TRY_AGAIN;
@@ -201,6 +202,7 @@ void Master::start(){
                         cout << "the buffer is not enough!" << endl;
                         close_fd(epollfd, serv_listenfd);
                         close_fd(epollfd, connection);
+                        connection=-1;
                         stop=true;
                         break;
                     }
@@ -286,10 +288,10 @@ void Master::start(){
 
         // 分配子线程来服务， 设置分离态线程
         pthread_t tid;
-        // cout << "the frpc size: " << frpcs.size() << endl 
-        //      << "the clients size: " << clients.size() << endl;
         if(frpcs.size()>clients.size()){
             cout << "the frpc connection is greater than client connection!" <<endl;
+            cout << "the frpc size: " << frpcs.size() << endl 
+             << "the clients size: " << clients.size() << endl;
             stop=true;
             continue;
         }
@@ -326,8 +328,8 @@ void Master::Listen(){
         perror("create listen socket failed!");
         exit(1);
     }
-    int opt=1;
-    setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, (const void*)&opt, sizeof(opt));
+    // int opt=1;
+    // setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, (const void*)&opt, sizeof(opt));
 
     int ret=bind(listenfd, (struct sockaddr*)&addr, sizeof(addr));
     if(ret==-1){
@@ -356,8 +358,8 @@ void Master::service_listen(short service_port){
         perror("create serv listen socket failed!");
         exit(1);
     }
-    int opt=1;
-    setsockopt(serv_listenfd, SOL_SOCKET, SO_REUSEADDR, (const void*)&opt, sizeof(opt));
+    // int opt=1;
+    // setsockopt(serv_listenfd, SOL_SOCKET, SO_REUSEADDR, (const void*)&opt, sizeof(opt));
     
     int ret=bind(serv_listenfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
     if(ret==-1){

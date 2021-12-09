@@ -222,7 +222,7 @@ RET_CODE Manager::write_fd1(){
             backward_write_idx = backward_read_idx=0;
             return BUFFER_EMPTY;
         }
-        bytes_write = send(fd1, backward_buffer+backward_write_idx, backward_read_idx-backward_write_idx, 0);
+        bytes_write = send(fd1, backward_buffer+backward_write_idx, backward_read_idx-backward_write_idx, MSG_NOSIGNAL);
         if(bytes_write==-1){
             // 内核没地方可写
             if(errno==EAGAIN || errno==EWOULDBLOCK) return TRY_AGAIN;
@@ -243,7 +243,7 @@ RET_CODE Manager::write_fd2(){
             forward_write_idx=forward_read_idx=0;
             return BUFFER_EMPTY;
         }
-        bytes_write = send(fd2, forward_buffer+forward_write_idx, forward_read_idx-forward_write_idx, 0);
+        bytes_write = send(fd2, forward_buffer+forward_write_idx, forward_read_idx-forward_write_idx, MSG_NOSIGNAL);
         if(bytes_write==-1){
             if(errno==EAGAIN || errno==EWOULDBLOCK) return TRY_AGAIN;
             return IOERR;
