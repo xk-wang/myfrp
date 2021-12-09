@@ -199,28 +199,43 @@ void Master::start(){
                 switch(res){
                     case BUFFER_FULL:{
                         cout << "the buffer is not enough!" << endl;
+                        close_fd(epollfd, serv_listenfd);
+                        close_fd(epollfd, connection);
                         stop=true;
-                        continue;
+                        break;
                     }
                     case IOERR:{
                         cout << "the frpc error!" << endl;
+                        close_fd(epollfd, serv_listenfd);
+                        close_fd(epollfd, connection);
+                        connection=-1;
+                        break;
                     }
                     case CLOSED:{
                         cout << "the frpc closed!" << endl;
+                        close_fd(epollfd, serv_listenfd);
+                        close_fd(epollfd, connection);
+                        connection=-1;
+                        break;
                     }
                     case NOTHING: {
                         // 需要去关闭启动的服务和相关连接
                         close_fd(epollfd, serv_listenfd);
                         close_fd(epollfd, connection);
+                        connection=-1;
                         cout << "the frpc send nothing!" << endl;
                         break;
+                    }
+                    case OK: {
+                        // 读取端口信息
+                        serv_port = read_from_buffer();
+                        service_listen(serv_port);
+                        cout << "start service at port: " << serv_port << endl;
                     }
                     default:
                         break;
                 }
-                serv_port = read_from_buffer();
-                service_listen(serv_port);
-                cout << "start service at port: " << serv_port << endl;
+                if(stop) break;
             }
             // frps请求frpc发起请求
             else if(events[i].data.fd == connection && (events[i].events & EPOLLOUT)){
@@ -233,24 +248,39 @@ void Master::start(){
                 if(res==BUFFER_FULL){
                     cout << "the buffer is not enough" << endl;
                     stop=true;
-                    continue;
+                    break;
                 }
                 res = write_to_frpc(); // 每次需要发送一个unsigned int来代表需要的连接数
                 switch(res){
-                    case IOERR:
-                    case CLOSED:
+                    case IOERR:{
+                        close_fd(epollfd, serv_listenfd);
+                        close_fd(epollfd, connection);
+                        connection = -1;
+                        cout << "the frpc error!" << endl;
+                        break;
+                    }
+                    case CLOSED:{
+                        close_fd(epollfd, serv_listenfd);
+                        close_fd(epollfd, connection);
+                        connection = -1;
+                        cout << "the frpc closed!" << endl;
+                        break;
+                    }
                     case TRY_AGAIN:{
                         close_fd(epollfd, serv_listenfd);
                         close_fd(epollfd, connection);
-                        cout << "the frpc closed or error or the kernel is not enough to write!" << endl;
+                        connection = -1;
+                        cout << "the kernel is not enough to write!" << endl;
                         break;
+                    }
+                    case BUFFER_EMPTY:{
+                        conn_need = 0;
+                        modfd(epollfd, connection, EPOLLIN);
+                        cout << "already write the need connection to frpc" << endl;
                     }
                     default:
                         break;
                 }
-                conn_need = 0;
-                modfd(epollfd, connection, EPOLLIN);
-                cout << "already write the need connection to frpc" << endl;
             }
         }
 

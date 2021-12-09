@@ -162,9 +162,11 @@ int Master::send_port(){
     switch(res){
         case IOERR:{
             cout << "the frps error" << endl;
+            return -1;
         }
         case CLOSED:{
             cout << "the frps closed" << endl;
+            return -1;
         }
         case TRY_AGAIN:{
             cout << "the kernel is not enough to send remote_port" << endl;
@@ -181,9 +183,11 @@ int Master::conn_need(){
     switch(res){
         case BUFFER_FULL:{
             cout << "the buffer is not enough to read" << endl;
+            return -1;
         }
         case IOERR:{
             cout << "the frps error" << endl;
+            return -1;
         }
         case CLOSED:{
             cout << "the frps closed" << endl;

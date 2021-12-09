@@ -38,7 +38,7 @@ public:
 
 // 定义
 const int Manager::EVENTS_SIZE = 5;
-const int Manager::BIG_BUFFER_SIZE = 512;
+const int Manager::BIG_BUFFER_SIZE = 65535;
 
 Manager::Manager(int ffd1, int ffd2): fd1(ffd1), fd2(ffd2),
         forward_read_idx(0), forward_write_idx(0),
@@ -64,7 +64,7 @@ void* Manager::start_routine(void* arg){
     epoll_event events[EVENTS_SIZE]; 
     add_readfd(epollfd, fd1);
     add_readfd(epollfd, fd2);
-    cout << "client: " << fd1 << " frpc: " << fd2 << endl;
+    cout << "outer: " << fd1 << " inner: " << fd2 << endl;
 
     // add_readf和modfd都是会覆盖以前的操作，不同的是add_readfd和add_writefd是
     // 初次使用调用EPOLL_CTL_ADD，modfd是进行侦听文件描述符的修改EPOLL_CTL_MOD
@@ -82,7 +82,7 @@ void* Manager::start_routine(void* arg){
             //读取fd1数据
             if(events[i].data.fd == fd1 && (events[i].events & EPOLLIN)){
                 res = manager->read_fd1();
-                cout << "read from client: " << fd1 << endl;
+                cout << "read from " << fd1 << endl;
                 switch(res){
                     case OK:
                     case BUFFER_FULL:{
@@ -102,7 +102,7 @@ void* Manager::start_routine(void* arg){
             // 读取fd2数据
             else if(events[i].data.fd == fd2 && (events[i].events & EPOLLIN)){
                 res = manager->read_fd2();
-                cout << "read from frpc: " << fd2 << endl;
+                cout << "read from " << fd2 << endl;
                 switch(res){
                     case OK:
                     case BUFFER_FULL:{
@@ -121,7 +121,7 @@ void* Manager::start_routine(void* arg){
             // 发送给fd1端
             else if(events[i].data.fd == fd1 && (events[i].events & EPOLLOUT)){
                 res = manager->write_fd1();
-                cout << "write from client: " << fd1 << endl;
+                cout << "write to " << fd1 << endl;
                 switch(res){
                     // 数据发送完毕 只改自己的状态为读侦听
                     case BUFFER_EMPTY:{
@@ -145,7 +145,7 @@ void* Manager::start_routine(void* arg){
             // 发送给fd2端
             else if(events[i].data.fd == fd2 && (events[i].events & EPOLLOUT)){
                 res = manager->write_fd2();
-                cout << "write from frpc: " << fd2 << endl;
+                cout << "write to " << fd2 << endl;
                 switch(res){
                     case BUFFER_EMPTY:{
                         modfd(epollfd, fd2, EPOLLIN);
@@ -189,6 +189,7 @@ RET_CODE Manager::read_fd1(){
         }
         else if(bytes_read==0) return CLOSED;
         forward_read_idx+=bytes_read;
+        cout << "bytes read: " << bytes_read << " ";
     }
     return (forward_read_idx-forward_write_idx>0)? OK: NOTHING;
 }
@@ -207,6 +208,8 @@ RET_CODE Manager::read_fd2(){
         }
         else if(bytes_read==0) return CLOSED;
         backward_read_idx+=bytes_read;
+        cout << "bytes read: " << bytes_read << " ";
+
     }
     return (backward_read_idx-backward_write_idx>0)? OK: NOTHING;
 }
@@ -227,6 +230,8 @@ RET_CODE Manager::write_fd1(){
         }
         else if(bytes_write==0) return CLOSED;
         backward_write_idx+=bytes_write;
+        cout << "bytes write: " << bytes_write << " ";
+
     }
     return OK;
 }
@@ -245,6 +250,8 @@ RET_CODE Manager::write_fd2(){
         }
         else if(bytes_write==0) return CLOSED;
         forward_write_idx+=bytes_write;
+        cout << "bytes write: " << bytes_write << " ";
+
     }
     return OK;
 }
