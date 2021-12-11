@@ -22,7 +22,7 @@ run frpc on your internal network machine
 ```
 
 ### todo list
-- [ ] heart beating support
+- [x] heart beating support
 - [ ] logging support
 - [ ] more than one service port support
 - [ ] more frpc clients connected to frps support
