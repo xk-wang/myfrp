@@ -274,19 +274,20 @@ void Master::start(){
                     }
                     case OK: {
                         // 读取端口信息 或者 心跳包
-                        serv_port = read_from_buffer();
-                        if(serv_port==-2){
+                        short value = read_from_buffer();
+                        if(value==short(-2)){
                             cout << "receive heart beat pack from frpc" << endl;
                         }
                         else{
+                            serv_port = value;
                             service_listen(serv_port);
-                            cout << "start service at port: " << serv_port << endl;
                         }
                     }
                     default:
                         break;
                 }
                 if(stop) break;
+
             }
             // frps请求frpc发起请求
             else if(events[i].data.fd == connection && (events[i].events & EPOLLOUT)){
