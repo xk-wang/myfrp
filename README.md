@@ -27,3 +27,4 @@ run frpc on your internal network machine
 - [ ] more than one service port support
 - [ ] more frpc clients connected to frps support
 - [ ] local port forwarding
+- [ ] support https parsing

@@ -10,6 +10,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "util.hpp"
 #include "manager.hpp"
@@ -29,6 +30,9 @@ private:
     // 缓冲区
     static const int BUFFER_SIZE;
     static const int EVENTS_SIZE;
+    static const int TIME_OUT;
+    static const int MAX_HEART_BEATS;
+
     char* buffer;
     int buffer_idx;
 
@@ -64,6 +68,11 @@ private:
 
     // 需要的连接数
     unsigned int conn_need;
+
+    // 心跳包
+    clock_t start_time;
+    int heart_count;
+    double interval();
 public:
     Master(int listen_port);
     ~Master();
@@ -72,8 +81,11 @@ public:
 
 const int Master::BUFFER_SIZE = 512;
 const int Master::EVENTS_SIZE = 5;
+const int Master::TIME_OUT = 40000;
+const int Master::MAX_HEART_BEATS = 3;
 
-Master::Master(int listen_port): port(listen_port), connection(-1), buffer_idx(0), conn_need(0){
+Master::Master(int listen_port): port(listen_port), connection(-1), buffer_idx(0), conn_need(0),
+                                 heart_count(0){
     buffer = new char[BUFFER_SIZE];
     epollfd = epoll_create(1);
 
@@ -86,10 +98,15 @@ Master::~Master(){
     close(serv_listenfd);
 }
 
+double Master::interval(){
+    clock()-start_time;
+    return (double)(clock()-start_time)*1000/CLOCKS_PER_SEC;
+}
+
 // frps和frpc只有两种类型的交互, 向frps发配置文件，向frpc发请求
 // 每次交互必须要先完成才能进行之后的动作
 
-// 读取配置文件只会发送一次(仅仅是发送一个端口号)
+// 接收一个端口号或者心跳包
 RET_CODE Master::read_from_frpc(){
     buffer_idx = 0;
     memset(buffer, '\0', BUFFER_SIZE);
@@ -149,6 +166,20 @@ short Master::read_from_buffer(){
     return port;
 }
 
+// 出错日志，服务端没发现客户端掉线，因此客户端重新连接被认定是发来新的connection用来
+// 给service服务
+
+// the frps listening: 20211
+// frpc connect
+// the service at: 20211 listening
+// start service at port: 32319
+// get conn for service
+// the frpc connection is greater than client connection!
+
+// 添加心跳包来保持frpc和frps的长连接
+// 基本原理是frpc通过长连接connection每隔30s向frps发送心跳包，如果connection断开那么
+// 心跳包会发送失败，产生ioerr, frpc关闭
+// frps也设置超时参数，至少timeout内需要收到心跳包才算正常, 否则代表连接失效
 void Master::start(){
     Listen();
     length = sizeof(frpc_addr);
@@ -157,11 +188,22 @@ void Master::start(){
     RET_CODE res;
     bool stop=false;
     epoll_event events[EVENTS_SIZE];
+    start_time = clock();
     while(!stop){
-        num = epoll_wait(epollfd, events, EVENTS_SIZE, -1);
+        // 有连接事件不代表存在connection事件或者心跳包，listenfd的不算
+        num = epoll_wait(epollfd, events, EVENTS_SIZE, TIME_OUT);
         if(num==-1){
             perror("epoll_wait failed!");
             exit(1);
+        }
+        if(interval()>=TIME_OUT){
+            ++heart_count;
+            if(heart_count>=MAX_HEART_BEATS){
+                cout << "the connection closed or error!" << endl;
+                close_fd(epollfd, serv_listenfd);
+                close_fd(epollfd, connection);
+                connection=-1;
+            }
         }
         for(int i=0;i<num;++i){
             if(events[i].data.fd == listenfd && (events[i].events & EPOLLIN)){
@@ -196,6 +238,8 @@ void Master::start(){
             }
             // 读取frpc发送的配置数据 目前只启动一个服务（端口）
             else if(events[i].data.fd == connection && (events[i].events & EPOLLIN)){
+                start_time = clock();
+                heart_count = 0;
                 res = read_from_frpc();
                 switch(res){
                     case BUFFER_FULL:{
@@ -229,10 +273,15 @@ void Master::start(){
                         break;
                     }
                     case OK: {
-                        // 读取端口信息
+                        // 读取端口信息 或者 心跳包
                         serv_port = read_from_buffer();
-                        service_listen(serv_port);
-                        cout << "start service at port: " << serv_port << endl;
+                        if(serv_port==-2){
+                            cout << "receive heart beat pack from frpc" << endl;
+                        }
+                        else{
+                            service_listen(serv_port);
+                            cout << "start service at port: " << serv_port << endl;
+                        }
                     }
                     default:
                         break;
@@ -241,6 +290,8 @@ void Master::start(){
             }
             // frps请求frpc发起请求
             else if(events[i].data.fd == connection && (events[i].events & EPOLLOUT)){
+                start_time = clock();
+                heart_count = 0;
                 if(conn_need<=0){
                     cout << "the conn_need is not positive" << endl;
                     modfd(epollfd, connection, EPOLLIN);

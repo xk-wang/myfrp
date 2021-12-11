@@ -30,6 +30,8 @@ class Master{
 private:
     static const int BUFFER_SIZE;
     static const int EVENTS_SIZE;
+    static const int TIME_OUT;
+    static const int MAX_HEART_BEATS;
     char* buffer;
     int buffer_idx;
 
@@ -44,7 +46,8 @@ private:
 
     // 和frps建立连接
     void Connect();
-    int send_port();
+    int send_port(short remote_port);
+    int send_heart_beat();
     int conn_need();
     // 分配连接来进行管理
     void arrange_new_pair(int &local_conn, int &remote_conn);
@@ -53,7 +56,10 @@ private:
     RET_CODE read_from_frps();
     int read_from_buffer();
     RET_CODE write_to_frps();
-    RET_CODE write_to_buffer();
+    RET_CODE write_to_buffer(short remote_port);
+
+    // 心跳包计数
+    int heart_count;
 
 public:
     Master(const string& serv_ip, short serv_port, short local_port, short remote_port);
@@ -63,10 +69,12 @@ public:
 
 const int Master::BUFFER_SIZE = 512;
 const int Master::EVENTS_SIZE = 5;
+const int Master::TIME_OUT = 30000;
+const int Master::MAX_HEART_BEATS = 3;
 
 Master::Master(const string& serv_ip, short serv_port, short port1, short port2):
         frps_ip(serv_ip), frps_port(serv_port), local_port(port1), 
-        remote_port(port2), buffer_idx(0){
+        remote_port(port2), buffer_idx(0), heart_count(0){
     buffer = new char[BUFFER_SIZE];
     epollfd = epoll_create(1);
 
@@ -96,14 +104,24 @@ void Master::start(){
     int local_conn, remote_conn;
     pthread_t tid;
     while(!stop){
-        num = epoll_wait(epollfd, events, EVENTS_SIZE, -1);
+        num = epoll_wait(epollfd, events, EVENTS_SIZE, TIME_OUT);
         if(num==-1){
             perror("epoll_wait failed!");
             exit(1);
         }
+        // 30s没connection的读写事件发生，需要发送心跳包
+        if(num==0){
+            res = send_heart_beat();
+            if(res==-1) ++heart_count;
+            else heart_count=0;
+            if(heart_count>=MAX_HEART_BEATS){
+                stop = true;
+                break;
+            }
+        }
         for(int i=0;i<num;++i){
             if(events[i].data.fd==connection && (events[i].events & EPOLLOUT)){
-                res = send_port();
+                res = send_port(remote_port);
                 if(res==-1){
                     stop = true;
                     break;
@@ -157,8 +175,8 @@ void Master::Connect(){
     add_writefd(epollfd, connection);
 }
 
-int Master::send_port(){
-    RET_CODE res = write_to_buffer();
+int Master::send_port(short remote_port){
+    RET_CODE res = write_to_buffer(remote_port);
     if(res==BUFFER_FULL){
         cout << "the buffer is not enough" << endl;
         exit(1);
@@ -175,6 +193,32 @@ int Master::send_port(){
         }
         case TRY_AGAIN:{
             cout << "the kernel is not enough to send remote_port" << endl;
+            return -1;
+        }
+        default:
+            break;
+    }
+    return 0;
+}
+
+int Master::send_heart_beat(){
+    RET_CODE res = write_to_buffer(-2);
+    if(res==BUFFER_FULL){
+        cout << "the buffer is not enough" << endl;
+        exit(1);
+    }
+    res = write_to_frps();
+    switch(res){
+        case IOERR:{
+            cout << "the frps error" << endl;
+            return -1;
+        }
+        case CLOSED:{
+            cout << "the frps closed" << endl;
+            return -1;
+        }
+        case TRY_AGAIN:{
+            cout << "the kernel is not enough to send heart beat pack" << endl;
             return -1;
         }
         default:
@@ -287,9 +331,9 @@ RET_CODE Master::write_to_frps(){
     return OK;
 }
 
-RET_CODE Master::write_to_buffer(){
-    if(BUFFER_SIZE<sizeof(remote_port)) return BUFFER_FULL;
+RET_CODE Master::write_to_buffer(short message){
+    if(BUFFER_SIZE<sizeof(message)) return BUFFER_FULL;
     memset(buffer, '\0', BUFFER_SIZE);
-    *((short*)buffer) = remote_port;
+    *((short*)buffer) = message;
     return OK;
 }
