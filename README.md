@@ -26,3 +26,4 @@ run frpc on your internal network machine
 - [ ] logging support
 - [ ] more than one service port support
 - [ ] more frpc clients connected to frps support
+- [ ] local port forwarding
