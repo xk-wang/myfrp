@@ -134,6 +134,8 @@ void Master::start(){
                 }
                 // 不行这个后续好像没法继续监听读事件
                 modfd(epollfd, connection, EPOLLIN);
+            }else{
+                cout << "the wrong type coming to frpc" << endl;
             }
         }
     }
