@@ -3,7 +3,7 @@
 myfrp is a software for intranet penetration like frp writing in golang. Currently this software only support one frpc connectd to one frps, one frpc service port open and many clients connected to frps at service port.
 
 ### usage
-**Compile**
+**Compile**.
 Currently it onpy supports linux platform and other platforms will not be supported in the future.
 
 ```sh
