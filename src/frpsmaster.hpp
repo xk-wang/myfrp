@@ -423,6 +423,6 @@ void Master::service_listen(short service_port){
         perror("listen failed!");
         exit(1);
     }
-    LOG(INFO) << "the service at " << port << " listening";
+    LOG(INFO) << "the service at " << service_port << " listening";
     add_readfd(epollfd ,serv_listenfd);  
 }

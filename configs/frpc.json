@@ -4,7 +4,7 @@
             "name": "ssh",
             "type": "tcp",
             "local_port": 22,
-            "remote_port": 32381
+            "remote_port": 32318
         },
         {
             "name": "iosproxy",
