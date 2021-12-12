@@ -18,6 +18,7 @@
 #include <iostream>
 #include <queue>
 #include <string>
+#include <unordered_map>
 using namespace std;
 
 // 功能如下：
@@ -34,36 +35,34 @@ private:
     static const int TIME_OUT;
     static const int MAX_HEART_BEATS;
     char* buffer;
-    int buffer_idx;
 
     // 和frps的连接socket 以及管理和服务的连接
-    short local_port, remote_port, frps_port;
-    string frps_ip;
+    struct sockaddr_in frps_addr;
+    // remote_port-->sockaddr_in的映射
+    unordered_map<short, struct sockaddr_in>locals;
     int connection;
-    struct sockaddr_in frps_addr, local;
 
     // 侦听
     int epollfd;
 
     // 和frps建立连接
     void Connect();
-    int send_port(short remote_port);
+    int send_port();
     int send_heart_beat();
-    int conn_need();
     // 分配连接来进行管理
-    void arrange_new_pair(int &local_conn, int &remote_conn);
+    void arrange_new_pair(short remote_port ,int &local_conn, int &remote_conn);
 
     // 和frps的通信
-    RET_CODE read_from_frps();
-    int read_from_buffer();
-    RET_CODE write_to_frps();
-    RET_CODE write_to_buffer(short remote_port);
+    RET_CODE write_to_frps(int length);
+    RET_CODE write_to_buffer(short message);
+    int read_conn_from_buffer(short& remote_port, short& conns);
+    RET_CODE write_ports_to_buffer();
 
     // 心跳包计数
     int heart_count;
 
 public:
-    Master(const string& serv_ip, short serv_port, short local_port, short remote_port);
+    Master(const string& serv_ip, short serv_port, const unordered_map<short, short>&ports);
     ~Master();
     void start();    
 };
@@ -73,28 +72,33 @@ const int Master::EVENTS_SIZE = 5;
 const int Master::TIME_OUT = 30000;
 const int Master::MAX_HEART_BEATS = 3;
 
-Master::Master(const string& serv_ip, short serv_port, short port1, short port2):
-        frps_ip(serv_ip), frps_port(serv_port), local_port(port1), 
-        remote_port(port2), buffer_idx(0), heart_count(0){
+Master::Master(const string& serv_ip, short serv_port, const unordered_map<short, short>&ports):
+        heart_count(0){
     buffer = new char[BUFFER_SIZE];
     epollfd = epoll_create(1);
 
     bzero(&frps_addr, sizeof(frps_addr));
     frps_addr.sin_family = AF_INET;
-    inet_pton(AF_INET, frps_ip.c_str(), &frps_addr.sin_addr);
-    frps_addr.sin_port = htons(frps_port);
+    inet_pton(AF_INET, serv_ip.c_str(), &frps_addr.sin_addr);
+    frps_addr.sin_port = htons(serv_port);
 
-    bzero(&local, sizeof(local));
-    local.sin_family = AF_INET;
-    local.sin_addr.s_addr = htonl(INADDR_ANY);
-    // inet_pton(AF_INET, "192.168.66.18", &local.sin_addr);
-    local.sin_port = htons(local_port);
+    // 构建remote_port-->struct sockaddr_in的映射
+    short remote_port, local_port;
+    struct sockaddr_in local_addr;
+    for(auto iter: ports){
+        short remote_port = iter.first, local_port = iter.second;
+        bzero(&local_addr, sizeof(local_addr));
+        local_addr.sin_family = AF_INET;
+        local_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        local_addr.sin_port = htons(local_port);
+        locals[remote_port] = local_addr;
+    }
 }
 
 Master::~Master(){
     delete []buffer;
-    close(epollfd);
-    close(connection);
+    close_file(epollfd);
+    close_file(connection);
 }
 
 void Master::start(){
@@ -102,7 +106,6 @@ void Master::start(){
     bool stop = false;
     epoll_event events[EVENTS_SIZE];
     int num, res;
-    int local_conn, remote_conn;
     pthread_t tid;
     while(!stop){
         num = epoll_wait(epollfd, events, EVENTS_SIZE, TIME_OUT);
@@ -122,37 +125,40 @@ void Master::start(){
         }
         for(int i=0;i<num;++i){
             if(events[i].data.fd==connection && (events[i].events & EPOLLOUT)){
-                res = send_port(remote_port);
+                res = send_port();
                 if(res==-1){
                     stop = true;
                     break;
                 }
                 modfd(epollfd, connection, EPOLLIN);
             }
+            // 读取内容格式为remote_port, conn_need每次发送一个服务的
             else if(events[i].data.fd==connection && (events[i].events & EPOLLIN)){
-                res = conn_need();
-                if(res<=0){
-                    stop = true;
+                short remote_port, conns;
+                res = read_conn_from_buffer(remote_port, conns);
+                if(res==-1){
                     break;
                 }
-                LOG(INFO) << "the conn needed by frps" << res;
+                LOG(INFO) << "remote_port " << remote_port << " need " << conns << "connections";
                 // 创建线程来管理转发任务
-                for(int i=0;i<res;++i){
-                    arrange_new_pair(local_conn, remote_conn);
+                int local_conn, remote_conn;
+                for(int i=0;i<conns;++i){
+                    arrange_new_pair(remote_port, local_conn, remote_conn);
                     Manager* manager = new Manager(remote_conn, local_conn);
                     int ret = ret=pthread_create(&tid, nullptr, Manager::start_routine, (void*)manager);
                     if(ret!=0){
-                    perror("pthread_create failed!");
-                    exit(1);
+                        close_file(local_conn);
+                        close_file(remote_conn);
+                        LOG(ERROR) << local_conn << "-->" <<remote_port << " pthread_create failed!";
                     }
                     ret=pthread_detach(tid);
                     if(ret!=0){
-                        perror("pthread_detach failed!");
-                        exit(1);
+                        close_file(local_conn);
+                        close_file(remote_conn);
+                        LOG(ERROR) << local_conn << "-->" <<remote_port << " pthread_detach failed!";
                     }
                 }
-                // 不行这个后续好像没法继续监听读事件
-                modfd(epollfd, connection, EPOLLIN);
+                // modfd(epollfd, connection, EPOLLIN);
             }else{
                 LOG(ERROR) << "the wrong type coming to frpc";
             }
@@ -163,26 +169,28 @@ void Master::start(){
 void Master::Connect(){
     connection = socket(PF_INET, SOCK_STREAM, 0);
     if(connection<0){
-        perror("create socket failed!");
+        LOG(ERROR) << "create socket failed!";
         exit(1);
     }
     int ret=connect(connection, (struct sockaddr*)&frps_addr, sizeof(frps_addr));
     if(ret!=0){
-        perror("connect failed!");
-        close(connection);
+        LOG(ERROR) << "connect frps failed!";
+        close_file(connection);
         exit(1);
     }
     // 准备发送配置信息
     add_writefd(epollfd, connection);
 }
 
-int Master::send_port(short remote_port){
-    RET_CODE res = write_to_buffer(remote_port);
+
+// 通信格式为port_len, port1, port2, ...均使用short型来发送
+int Master::send_port(){
+    RET_CODE res = write_ports_to_buffer();
     if(res==BUFFER_FULL){
         LOG(ERROR) << "the buffer is not enough";
         exit(1);
     }
-    res = write_to_frps();
+    res = write_to_frps(sizeof(short)*(locals.size()+1));
     switch(res){
         case IOERR:{
             LOG(ERROR) << "the frps error";
@@ -208,7 +216,7 @@ int Master::send_heart_beat(){
         LOG(ERROR) << "the buffer is not enough";
         exit(1);
     }
-    res = write_to_frps();
+    res = write_to_frps(sizeof(short));
     switch(res){
         case IOERR:{
             LOG(ERROR) << "the frps error";
@@ -228,90 +236,57 @@ int Master::send_heart_beat(){
     return 0;
 }
 
-int Master::conn_need(){
-    RET_CODE res = read_from_frps();
-    switch(res){
-        case BUFFER_FULL:{
-            LOG(ERROR) << "the buffer is not enough to read";
-            return -1;
-        }
-        case IOERR:{
-            LOG(ERROR) << "the frps error";
-            return -1;
-        }
-        case CLOSED:{
-            LOG(ERROR) << "the frps closed";
-            return -1;
-        }
-        default:
-            break;
-    }
-    int num = read_from_buffer();
-    if(num==0){
-        LOG(INFO) << "the conn_need is 0";
-    }
-    return num;
-}
-
 // 进行连接分配管理
-void Master::arrange_new_pair(int &local_conn, int &frps_conn){
+void Master::arrange_new_pair(short remote_port, int &local_conn, int &serv_conn){
     // 设置线程
     // 连接本地22端口
     local_conn = socket(PF_INET, SOCK_STREAM, 0);
     if(local_conn<0){
-        perror("create socket failed!");
-        exit(1);
+        LOG(ERROR) << "create local_conn socket failed!";
+        return;
     }
-    int ret=connect(local_conn, (struct sockaddr*)&local, sizeof(local));
+    int ret=connect(local_conn, (struct sockaddr*)&locals[remote_port], sizeof(locals[remote_port]));
     if(ret!=0){
-        perror("connect failed!");
-        close(local_conn);
-        exit(1);
+        LOG(ERROR) << "connect local_port " << ntohs(locals[remote_port].sin_port) << " failed!";
+        close_file(local_conn);
+        return;
     }
 
-    // 和frps连接
-    frps_conn = socket(PF_INET, SOCK_STREAM, 0);
-    if(frps_conn<0){
-        perror("create socket failed!");
-        exit(1);
+    // 和frps相关的服务来连接比如32318端口
+    serv_conn = socket(PF_INET, SOCK_STREAM, 0);
+    if(serv_conn<0){
+        LOG(ERROR) << "create serv_conn socket failed!";
+        return;
     }
-    ret=connect(frps_conn, (struct sockaddr*)&frps_addr, sizeof(frps_addr));
+    frps_addr.sin_port = htons(remote_port);
+    ret=connect(serv_conn, (struct sockaddr*)&frps_addr, sizeof(frps_addr));
     if(ret!=0){
-        perror("connect failed!");
-        close(frps_conn);
-        exit(1);
+        LOG(ERROR) << "connect remote_port " << remote_port << " failed!";
+        close_file(serv_conn);
+        return;
     }
 }
 
-// 读取从frps发来的连接需求数量
-RET_CODE Master::read_from_frps(){
-    buffer_idx = 0;
-    memset(buffer, '\0', BUFFER_SIZE);
-    int bytes_read;
-    while(true){
-        if(buffer_idx>=BUFFER_SIZE){
-            return BUFFER_FULL;
-        }
-        bytes_read = recv(connection, buffer+buffer_idx, BUFFER_SIZE-buffer_idx, 0);
-        if(bytes_read==-1){
-            if(errno==EAGAIN || errno==EWOULDBLOCK) break;
-            return IOERR;
-        }
-        else if(bytes_read==0) return CLOSED;
-        buffer_idx+=bytes_read;
+
+int Master::read_conn_from_buffer(short& remote_port, short& conns){
+    short* p = (short*)buffer;
+    remote_port = *p++;
+    if(remote_port<=0){
+        LOG(ERROR) << "the remote port received <=0";
+        return -1;
     }
-    return (buffer_idx>0)?buffer_idx=0, OK: NOTHING;
-}
-
-int Master::read_from_buffer(){
-    int num = *((int*)buffer);
+    conns = *p;
+    if(conns<=0){
+        LOG(ERROR) << "the conns need by remote_port " << remote_port << " is <=0";
+        return -1;
+    }
     memset(buffer, '\0', BUFFER_SIZE);
-    return num;
+    return 0;
 }
 
-RET_CODE Master::write_to_frps(){
-    int bytes_write = 0, length = sizeof(remote_port);
-    buffer_idx = 0;
+RET_CODE Master::write_to_frps(int length){
+    int bytes_write = 0;
+    int buffer_idx = 0;
     while(true){
         if(buffer_idx>=length){
             buffer_idx = 0;
@@ -319,10 +294,17 @@ RET_CODE Master::write_to_frps(){
             return BUFFER_EMPTY;
         }
         // 防止连接关闭去写导致程序崩溃
+        int retry = 0;
+        label:
         bytes_write = send(connection, buffer+buffer_idx, length-buffer_idx, MSG_NOSIGNAL);
         if(bytes_write==-1){
+            // 等候缓冲区
             if(errno==EAGAIN || errno==EWOULDBLOCK){
-                return TRY_AGAIN;
+                ++retry;
+                if(retry>5){
+                    return TRY_AGAIN;
+                }
+                goto label;
             }
             return IOERR;
         }
@@ -336,5 +318,19 @@ RET_CODE Master::write_to_buffer(short message){
     if(BUFFER_SIZE<sizeof(message)) return BUFFER_FULL;
     memset(buffer, '\0', BUFFER_SIZE);
     *((short*)buffer) = message;
+    return OK;
+}
+
+RET_CODE Master::write_ports_to_buffer(){
+    if(locals.size()>65535){
+        LOG(ERROR) << "the max service port num is 65536";
+        exit(1);
+    }
+    short port_num = locals.size();
+    if((port_num+1)*sizeof(short)>BUFFER_SIZE) return BUFFER_FULL;
+    memset(buffer, '\0', BUFFER_SIZE);
+    short* p = (short*)buffer;
+    *p++ = port_num;
+    for(auto iter: locals) *p++ = iter.first;
     return OK;
 }

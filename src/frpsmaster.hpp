@@ -19,15 +19,15 @@
 #include <queue>
 using namespace std;
 
-// 描述frps主线程处理的事情，包含port侦听、与frpc通信开启remote_port、
-// 侦听remote_port、向frpc请求建立连接 管理来自remote_port的连接和
-// 请求建立的连接
+// 主线程负责接收conncetion发来的配置端口和心跳
+// 子线程负责每个服务的端口侦听和连接，以及通过connection向frpc发出请求
+// 通过比较连接请求的addr和端口来判断是frpc发来的连接还是客户端发来的连接
+// 子子线程负责具体的数据交互
+
+// 子线程发送连接需求时要考虑竞态条件
 
 class Master{
 private:
-    // 也需要设计两个缓冲区，现在一个缓冲区每次读写之前需要进行memset需要消息一次发送
-    // 并不合理
-    // 缓冲区
     static const int BUFFER_SIZE;
     static const int EVENTS_SIZE;
     static const int TIME_OUT;
