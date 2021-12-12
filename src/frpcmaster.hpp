@@ -13,6 +13,7 @@
 
 #include "util.hpp"
 #include "manager.hpp"
+#include "easylogging++.h"
 
 #include <iostream>
 #include <queue>
@@ -134,7 +135,7 @@ void Master::start(){
                     stop = true;
                     break;
                 }
-                cout << "the conn needed by frps" << res << endl;
+                LOG(INFO) << "the conn needed by frps" << res;
                 // 创建线程来管理转发任务
                 for(int i=0;i<res;++i){
                     arrange_new_pair(local_conn, remote_conn);
@@ -153,7 +154,7 @@ void Master::start(){
                 // 不行这个后续好像没法继续监听读事件
                 modfd(epollfd, connection, EPOLLIN);
             }else{
-                cout << "the wrong type coming to frpc" << endl;
+                LOG(ERROR) << "the wrong type coming to frpc";
             }
         }
     }
@@ -178,21 +179,21 @@ void Master::Connect(){
 int Master::send_port(short remote_port){
     RET_CODE res = write_to_buffer(remote_port);
     if(res==BUFFER_FULL){
-        cout << "the buffer is not enough" << endl;
+        LOG(ERROR) << "the buffer is not enough";
         exit(1);
     }
     res = write_to_frps();
     switch(res){
         case IOERR:{
-            cout << "the frps error" << endl;
+            LOG(ERROR) << "the frps error";
             return -1;
         }
         case CLOSED:{
-            cout << "the frps closed" << endl;
+            LOG(ERROR) << "the frps closed";
             return -1;
         }
         case TRY_AGAIN:{
-            cout << "the kernel is not enough to send remote_port" << endl;
+            LOG(ERROR) << "the kernel is not enough to send remote_port";
             return -1;
         }
         default:
@@ -204,21 +205,21 @@ int Master::send_port(short remote_port){
 int Master::send_heart_beat(){
     RET_CODE res = write_to_buffer(-2);
     if(res==BUFFER_FULL){
-        cout << "the buffer is not enough" << endl;
+        LOG(ERROR) << "the buffer is not enough";
         exit(1);
     }
     res = write_to_frps();
     switch(res){
         case IOERR:{
-            cout << "the frps error" << endl;
+            LOG(ERROR) << "the frps error";
             return -1;
         }
         case CLOSED:{
-            cout << "the frps closed" << endl;
+            LOG(ERROR) << "the frps closed";
             return -1;
         }
         case TRY_AGAIN:{
-            cout << "the kernel is not enough to send heart beat pack" << endl;
+            LOG(ERROR) << "the kernel is not enough to send heart beat pack";
             return -1;
         }
         default:
@@ -231,15 +232,15 @@ int Master::conn_need(){
     RET_CODE res = read_from_frps();
     switch(res){
         case BUFFER_FULL:{
-            cout << "the buffer is not enough to read" << endl;
+            LOG(ERROR) << "the buffer is not enough to read";
             return -1;
         }
         case IOERR:{
-            cout << "the frps error" << endl;
+            LOG(ERROR) << "the frps error";
             return -1;
         }
         case CLOSED:{
-            cout << "the frps closed" << endl;
+            LOG(ERROR) << "the frps closed";
             return -1;
         }
         default:
@@ -247,7 +248,7 @@ int Master::conn_need(){
     }
     int num = read_from_buffer();
     if(num==0){
-        cout << "the conn_need is 0" << endl;
+        LOG(INFO) << "the conn_need is 0";
     }
     return num;
 }

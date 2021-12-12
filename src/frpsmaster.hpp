@@ -199,7 +199,7 @@ void Master::start(){
         if(interval()>=TIME_OUT){
             ++heart_count;
             if(heart_count>=MAX_HEART_BEATS){
-                cout << "the connection closed or error!" << endl;
+                LOG(INFO) << "the connection closed or error!";
                 close_fd(epollfd, serv_listenfd);
                 close_fd(epollfd, connection);
                 connection=-1;
@@ -214,11 +214,11 @@ void Master::start(){
                 }
                 // connection还没赋值则构建frpc和frps的主连接
                 if(connection==-1){
-                    cout << "frpc connect" << endl;
+                    LOG(INFO) << "frpc connect";
                     connection = conn;
                     add_readfd(epollfd, connection);
                 }else{ // 是frpc的给其他服务的连接
-                    cout << "get conn for service" << endl;
+                    LOG(INFO) << "get conn for service";
                     frpcs.push(conn);
                 }
             }
@@ -229,12 +229,12 @@ void Master::start(){
                     perror("accept serv failed!");
                     exit(1);
                 }
-                cout << "client: " << client_fd << " connect" << endl;
+                LOG(INFO) << "client: " << client_fd << " connect";
                 clients.push(client_fd);
                 // 准备发数据给frpc
                 modfd(epollfd, connection, EPOLLOUT);
                 ++conn_need;
-                cout << "the conn_need: " << conn_need << endl;
+                LOG(INFO) << "the conn_need: " << conn_need;
             }
             // 读取frpc发送的配置数据 目前只启动一个服务（端口）
             else if(events[i].data.fd == connection && (events[i].events & EPOLLIN)){
@@ -243,7 +243,7 @@ void Master::start(){
                 res = read_from_frpc();
                 switch(res){
                     case BUFFER_FULL:{
-                        cout << "the buffer is not enough!" << endl;
+                        LOG(ERROR) << "the buffer is not enough!";
                         close_fd(epollfd, serv_listenfd);
                         close_fd(epollfd, connection);
                         connection=-1;
@@ -251,14 +251,14 @@ void Master::start(){
                         break;
                     }
                     case IOERR:{
-                        cout << "the frpc error!" << endl;
+                        LOG(ERROR) << "the frpc error!";
                         close_fd(epollfd, serv_listenfd);
                         close_fd(epollfd, connection);
                         connection=-1;
                         break;
                     }
                     case CLOSED:{
-                        cout << "the frpc closed!" << endl;
+                        LOG(ERROR) << "the frpc closed!";
                         close_fd(epollfd, serv_listenfd);
                         close_fd(epollfd, connection);
                         connection=-1;
@@ -269,14 +269,14 @@ void Master::start(){
                         close_fd(epollfd, serv_listenfd);
                         close_fd(epollfd, connection);
                         connection=-1;
-                        cout << "the frpc send nothing!" << endl;
+                        LOG(ERROR) << "the frpc send nothing!";
                         break;
                     }
                     case OK: {
                         // 读取端口信息 或者 心跳包
                         short value = read_from_buffer();
                         if(value==short(-2)){
-                            cout << "receive heart beat pack from frpc" << endl;
+                            LOG(INFO) << "receive heart beat pack from frpc";
                         }
                         else{
                             serv_port = value;
@@ -294,13 +294,13 @@ void Master::start(){
                 start_time = clock();
                 heart_count = 0;
                 if(conn_need<=0){
-                    cout << "the conn_need is not positive" << endl;
+                    LOG(ERROR) << "the conn_need is not positive";
                     modfd(epollfd, connection, EPOLLIN);
                     continue;
                 }
                 res = write_to_buffer(conn_need);
                 if(res==BUFFER_FULL){
-                    cout << "the buffer is not enough" << endl;
+                    LOG(ERROR) << "the buffer is not enough";
                     stop=true;
                     break;
                 }
@@ -310,27 +310,27 @@ void Master::start(){
                         close_fd(epollfd, serv_listenfd);
                         close_fd(epollfd, connection);
                         connection = -1;
-                        cout << "the frpc error!" << endl;
+                        LOG(ERROR) << "the frpc error!";
                         break;
                     }
                     case CLOSED:{
                         close_fd(epollfd, serv_listenfd);
                         close_fd(epollfd, connection);
                         connection = -1;
-                        cout << "the frpc closed!" << endl;
+                        LOG(ERROR) << "the frpc closed!";
                         break;
                     }
                     case TRY_AGAIN:{
                         close_fd(epollfd, serv_listenfd);
                         close_fd(epollfd, connection);
                         connection = -1;
-                        cout << "the kernel is not enough to write!" << endl;
+                        LOG(ERROR) << "the kernel is not enough to write!";
                         break;
                     }
                     case BUFFER_EMPTY:{
                         conn_need = 0;
                         modfd(epollfd, connection, EPOLLIN);
-                        cout << "already write the need connection to frpc" << endl;
+                        LOG(INFO) << "already write the need connection to frpc";
                     }
                     default:
                         break;
@@ -341,9 +341,9 @@ void Master::start(){
         // 分配子线程来服务， 设置分离态线程
         pthread_t tid;
         if(frpcs.size()>clients.size()){
-            cout << "the frpc connection is greater than client connection!" <<endl;
-            cout << "the frpc size: " << frpcs.size() << endl 
-             << "the clients size: " << clients.size() << endl;
+            LOG(ERROR) << "the frpc connection is greater than client connection!";
+            LOG(ERROR) << "the frpc size: " << frpcs.size() 
+                       << "the clients size: " << clients.size();
             stop=true;
             continue;
         }
@@ -393,7 +393,7 @@ void Master::Listen(){
         perror("listen failed!");
         exit(1);
     }
-    cout << "the frps listening: " << port << endl;
+    LOG(INFO) << "the frps listening: " << port;
     add_readfd(epollfd, listenfd);
 }
 
@@ -423,6 +423,6 @@ void Master::service_listen(short service_port){
         perror("listen failed!");
         exit(1);
     }
-    cout << "the service at: " << port << " listening" << endl;
+    LOG(INFO) << "the service at " << port << " listening";
     add_readfd(epollfd ,serv_listenfd);  
 }

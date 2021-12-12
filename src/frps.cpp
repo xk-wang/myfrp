@@ -4,16 +4,17 @@
 #include "cmdline.hpp"
 #include "frpsmaster.hpp"
 #include "util.hpp"
-
-using namespace std;
-
+#include "easylogging++.h"
 #include "json.hpp"
+using namespace std;
 using nlohmann::json;
+
+INITIALIZE_EASYLOGGINGPP
 
 int parse_json(const string& cfg_file){
     ifstream file(cfg_file);
     if(!file){
-        cout << "the config path: " << cfg_file << " does not exists" << endl;
+        LOG(ERROR) << "the config path: " << cfg_file << " does not exists";
         exit(1);
     }
     json configs;
