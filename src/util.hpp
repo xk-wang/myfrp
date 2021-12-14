@@ -77,8 +77,14 @@ void modfd(int epollfd, int fd, int ev){
     epoll_ctl(epollfd, EPOLL_CTL_MOD, fd, &event);
 }
 
+void close_file(int fd){
+    if(fd!=-1){
+        close(fd);
+        fd = -1;
+    }
+}
+
 void close_fd(int epollfd, int fd){
     epoll_ctl(epollfd, EPOLL_CTL_DEL, fd, 0);
-    close(fd);
-    fd=NULL;
+    close_file(fd);
 }

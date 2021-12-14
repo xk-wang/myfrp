@@ -28,3 +28,4 @@ run frpc on your internal network machine
 - [ ] more frpc clients connected to frps support
 - [ ] local port forwarding
 - [ ] support https parsing
+- [ ] support udp service
