@@ -155,7 +155,7 @@ void* FRPSManager::start_frps_routine(void* arg){
                 }
             }
             //读取fd1数据
-            if(events[i].data.fd == fd1 && (events[i].events & EPOLLIN)){
+            else if(events[i].data.fd == fd1 && (events[i].events & EPOLLIN)){
                 res = manager->read_fd1();
                 LOG(INFO) << "read from " << fd1;
                 switch(res){
@@ -200,7 +200,7 @@ void* FRPSManager::start_frps_routine(void* arg){
             }
             // 其他事件数据错误
             else{
-                perror("the event is is not right");
+                LOG(ERROR) << "the event is is not right";
                 stop=true;
             }
         }
@@ -238,7 +238,7 @@ int FRPSManager::send_port(){
 }
 
 int FRPSManager::recv_state(){
-    int buffer_idx = 0, length=sizeof(short);
+    int buffer_idx = 0, length=sizeof(short)+1;
     int bytes_read = 0;
     char buffer[length];
     while(true){
@@ -256,6 +256,7 @@ int FRPSManager::recv_state(){
             LOG(ERROR) << "the frpc closed";
             return -1;
         }
+        LOG(INFO) << "bytes_read: " << bytes_read << " length: " << length;
         buffer_idx += bytes_read;
     }
     if(buffer_idx==0){
