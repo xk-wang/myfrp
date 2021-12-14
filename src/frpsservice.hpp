@@ -95,16 +95,6 @@ void Service::start(){
                     perror("accept failed!");
                     exit(1);
                 }
-                // 必须要等connection被赋值之后才能接收连接
-                // 但是现在没法去将frpc和client进行区分？
-                // 通过另外一种方式来解决，每创建一个service对象时让frpc发起一个主动连接
-                // 将该连接交付给service对象独占
-
-                // 上述方法解决了竞态问题，但是没有解决区分frpc和client的问题
-                // 如果epoll_wait线程安全可以通过epoll保持侦听6996端口来接收连接
-                // 虽然线程安全，但是一般的网络库是使用pipe, 这里也使用pipe, 由子线程通过管道向父线程发起通知告知remote_port, conn
-                // 还是没法将接受的连接（不管是6996还是32318）正确分配给具体的服务
-                // 也不能使用sockaddr_in的sin_zero, 这个参数必须要清零，只是为了填充字节
                 if(is_frpc(client_addr)){
                     LOG(INFO) << "received frpc connection for service";
                     frpcs.push(conn);

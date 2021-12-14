@@ -12,7 +12,7 @@
 #include <string.h>
 
 #include "util.hpp"
-#include "manager.hpp"
+#include "frpcmanager.hpp"
 #include "easylogging++.h"
 
 #include <iostream>
@@ -50,7 +50,7 @@ private:
     int send_port();
     int send_heart_beat();
     // 分配连接来进行管理
-    void arrange_new_pair(short remote_port ,int &local_conn, int &remote_conn);
+    void arrange_new_pair(short remote_port, int &remote_conn);
 
     // 和frps的通信
     RET_CODE write_to_frps(int length);
@@ -141,21 +141,19 @@ void Master::start(){
                 }
                 LOG(INFO) << "remote_port " << remote_port << " need " << conns << "connections";
                 // 创建线程来管理转发任务
-                int local_conn, remote_conn;
+                int remote_conn;
                 for(int i=0;i<conns;++i){
-                    arrange_new_pair(remote_port, local_conn, remote_conn);
-                    Manager* manager = new Manager(remote_conn, local_conn);
-                    int ret = ret=pthread_create(&tid, nullptr, Manager::start_routine, (void*)manager);
+                    arrange_new_pair(remote_port, remote_conn);
+                    FRPCManager* manager = new FRPCManager(remote_conn, locals);
+                    int ret = ret=pthread_create(&tid, nullptr, FRPCManager::start_frpc_routine, (void*)manager);
                     if(ret!=0){
-                        close_file(local_conn);
                         close_file(remote_conn);
-                        LOG(ERROR) << local_conn << "-->" <<remote_port << " pthread_create failed!";
+                        LOG(ERROR) << "-->" <<remote_port << " pthread_create failed!";
                     }
                     ret=pthread_detach(tid);
                     if(ret!=0){
-                        close_file(local_conn);
                         close_file(remote_conn);
-                        LOG(ERROR) << local_conn << "-->" <<remote_port << " pthread_detach failed!";
+                        LOG(ERROR) << "-->" <<remote_port << " pthread_detach failed!";
                     }
                 }
                 // modfd(epollfd, connection, EPOLLIN);
@@ -237,21 +235,8 @@ int Master::send_heart_beat(){
 }
 
 // 进行连接分配管理
-void Master::arrange_new_pair(short remote_port, int &local_conn, int &serv_conn){
+void Master::arrange_new_pair(short remote_port, int &serv_conn){
     // 设置线程
-    // 连接本地22端口
-    local_conn = socket(PF_INET, SOCK_STREAM, 0);
-    if(local_conn<0){
-        LOG(ERROR) << "create local_conn socket failed!";
-        return;
-    }
-    int ret=connect(local_conn, (struct sockaddr*)&locals[remote_port], sizeof(locals[remote_port]));
-    if(ret!=0){
-        LOG(ERROR) << "connect local_port " << ntohs(locals[remote_port].sin_port) << " failed!";
-        close_file(local_conn);
-        return;
-    }
-
     // 和frps相关的服务来连接比如32318端口
     serv_conn = socket(PF_INET, SOCK_STREAM, 0);
     if(serv_conn<0){
