@@ -15,45 +15,45 @@
 
 class FRPSManager{
 private:
-    // 缓冲区
     static const int BIG_BUFFER_SIZE;
     static const int EVENTS_SIZE;
+
     char *forward_buffer, *backward_buffer;
     int forward_read_idx, forward_write_idx;
     int backward_read_idx, backward_write_idx;
 
-    // 可选的端口号
+    // 需要进行发送的端口号
     short port;
-private:
-    // 先发送端口
-    RET_CODE send_port();
-    RET_CODE recv_state();
+
+// 对象方法
 public:
+    FRPSManager(short port, int ffd1, int ffd2);
+    ~FRPSManager();
     // 侦听
     int epollfd;
     int fd1, fd2;
-public:
-    // frps的工作线程 可以来告知端口号
-    FRPSManager(int port, int ffd1, int ffd2);
-    ~FRPSManager();
+    int send_port();
+    int recv_state();
 
-    // frps的连接控制
-    static void* start_frps_routine(void* arg);
-
-    // socket读写
+    // 底层socket读写
     RET_CODE read_fd1();
     RET_CODE write_fd1();
     RET_CODE read_fd2();
     RET_CODE write_fd2();
+
+// 类的方法
+public:
+    static void* start_frps_routine(void* arg);
 };
 
 // 定义
 const int FRPSManager::EVENTS_SIZE = 5;
 const int FRPSManager::BIG_BUFFER_SIZE = 65535;
 
-FRPSManager::FRPSManager(short p, int ffd1, int ffd2): fd1(ffd1), fd2(ffd2),
+FRPSManager::FRPSManager(short p, int ffd1, int ffd2):
+        port(p), fd1(ffd1), fd2(ffd2),
         forward_read_idx(0), forward_write_idx(0),
-        backward_read_idx(0), backward_write_idx(0), port(p){
+        backward_read_idx(0), backward_write_idx(0){
     
     forward_buffer = new char[BIG_BUFFER_SIZE];
     backward_buffer = new char[BIG_BUFFER_SIZE];
@@ -73,44 +73,27 @@ void* FRPSManager::start_frps_routine(void* arg){
     int epollfd = manager->epollfd;
     // fd1是client，fd2是frpc
     int fd1 = manager->fd1, fd2 = manager->fd2;
-    epoll_event events[EVENTS_SIZE];
-
-    // add_readfd(epollfd, fd1);
     // 准备发送端口号
     add_writefd(epollfd, fd2);
-    // LOG(INFO) << "outer: " << fd1 << " inner: " << fd2;
+    epoll_event events[EVENTS_SIZE];
+
     int ret, num;
     RET_CODE res;
     bool stop=false, comm_out=true, comm_in=true;
     while(!stop){
-        int ret = epoll_wait(epollfd, events, EVENTS_SIZE, -1);
-        if(ret==-1){
-            perror("epoll_wait failed!");
-            exit(1);
+        int num = epoll_wait(epollfd, events, EVENTS_SIZE, -1);
+        if(num==-1){
+            LOG(ERROR) << "epoll_wait failed!";
+            break;
         }
-        for(int i=0;i<ret;++i){
+        for(int i=0;i<num;++i){
             // fd2可写 需要先来进行判断是否是通信的开始阶段
             if(events[i].data.fd == fd2 && (events[i].events & EPOLLOUT)){
                 if(comm_out){
-                    res = send_port();
-                    switch(res){
-                        case IOERR:{
-                            LOG(ERROR) << "the frpc error";
-                            stop = true;
-                            break;
-                        }
-                        case CLOSED:{
-                            LOG(ERROR) << "the frpc closed";
-                            stop = true;
-                            break;
-                        }
-                        case TRY_AGAIN:{
-                            LOG(ERROR) << "the kernel buffer is not enough to save data";
-                            stop = true;
-                            break;
-                        }
-                        default:
-                            break;
+                    ret = manager->send_port();
+                    if(ret==-1){
+                        stop = true;
+                        break;
                     }
                     comm_out = false;
                     // 侦听来自frpc的ok状态码
@@ -142,20 +125,20 @@ void* FRPSManager::start_frps_routine(void* arg){
             // 读取fd2数据 区分是通信的开始还是正常的数据交互
             else if(events[i].data.fd == fd2 && (events[i].events & EPOLLIN)){
                 if(comm_in){
-                    res = recv_state();
-                    if(res!=OK){
+                    ret = manager->recv_state();
+                    if(ret==-1){
                         stop = true;
                         break;
                     }
-                    // 通信的准备工作完善了，现在开始进行数据交互逻辑
-                    add_readfd(epollfd, fd1)
+                    // 通信的准备工作完善 开始进行数据交互逻辑
+                    add_readfd(epollfd, fd1);
                     modfd(epollfd, fd2, EPOLLIN);
                     comm_in = false;
                 }
                 else{
-                    res = manager->read_fd2();
+                    ret = manager->read_fd2();
                     LOG(INFO) << "read from " << fd2;
-                    switch(res){
+                    switch(ret){
                         case OK:
                         case BUFFER_FULL:{
                             modfd(epollfd, fd1, EPOLLOUT);
@@ -226,49 +209,61 @@ void* FRPSManager::start_frps_routine(void* arg){
     return nullptr;
 }
 
-RET_CODE FRPSManager::send_port(){
+int FRPSManager::send_port(){
     int buffer_idx = 0, length=sizeof(port);
     int bytes_write = 0;
     char buffer[length];
     *((short*)buffer) = port;
     while(true){
+        // 发送完毕
         if(buffer_idx>=length){
-            return BUFFER_FULL;
+            return 0;
         }
         bytes_write = send(fd2, buffer+buffer_idx, length-buffer_idx, MSG_NOSIGNAL);
         if(bytes_write==-1){
             if(errno==EAGAIN || errno==EWOULDBLOCK){
-                return TRY_AGAIN;
+                LOG(ERROR) << "the kernel buffer is not enough to send port";
+                return -1;
             }
-            return IOERR;
+            LOG(ERROR) << "the frpc error";
+            return -1;
         }
-        else if(bytes_write==0) return CLOSED;
+        else if(bytes_write==0){
+            LOG(ERROR) << "the frpc closed";
+            return -1;
+        }
         buffer_idx += bytes_write;
     }
-    return OK;
+    return 0;
 }
 
-RET_CODE FRPSManager::recv_state(){
+int FRPSManager::recv_state(){
     int buffer_idx = 0, length=sizeof(short);
     int bytes_read = 0;
     char buffer[length];
     while(true){
         if(buffer_idx>=length){
             LOG(ERROR) << "the buffer is not enough";
-            return  BUFFER_FULL;
+            return  -1;
         }
         bytes_read = recv(fd2, buffer+buffer_idx, length-buffer_idx, 0);
         if(bytes_read==-1){
             if(errno==EAGAIN || errno==EWOULDBLOCK) break;
             LOG(ERROR) << "the frpc connection is error";
-            return IOERR;
+            return -1;
         }
-        else if(bytes_read==0) return CLOSED;
+        else if(bytes_read==0){
+            LOG(ERROR) << "the frpc closed";
+            return -1;
+        }
         buffer_idx += bytes_read;
     }
-    if(buffer_idx==0) return NOTHING;
-    if(*(short*)buffer==0) return OK;
-    return NOTHING;
+    if(buffer_idx==0){
+        LOG(ERROR) << "frpc send nothing";
+        return -1;
+    }
+    if(*(short*)buffer==0) return 0;
+    return -1;
 }
 
 RET_CODE FRPSManager::read_fd1(){
@@ -327,7 +322,6 @@ RET_CODE FRPSManager::write_fd1(){
         else if(bytes_write==0) return CLOSED;
         backward_write_idx+=bytes_write;
         LOG(INFO) << "bytes write: " << bytes_write << " ";
-
     }
     return OK;
 }

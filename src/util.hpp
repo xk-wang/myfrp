@@ -52,8 +52,7 @@ int set_nonblocking(int fd){
     return old_option;
 }
 
-// 这个是将之前的侦听进行了覆盖
-// modfd基本上是一样的
+// 将之前的侦听进行了覆盖
 void add_readfd(int epollfd, int fd){
     epoll_event event;
     event.data.fd = fd;

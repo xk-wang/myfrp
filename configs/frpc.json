@@ -9,8 +9,8 @@
         {
             "name": "iosproxy",
             "type": "tcp",
-            "local_port": 1847,
-            "remote_port": 1847
+            "local_port": 22,
+            "remote_port": 32319
         }
     ],
     "common":{

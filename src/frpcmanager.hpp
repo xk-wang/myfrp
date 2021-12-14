@@ -9,18 +9,19 @@
 #include <arpa/inet.h>
 #include <stdio.h>
 #include <string.h>
-
 #include <unordered_map>
-using namespace std;
 
 #include "util.hpp"
 #include "easylogging++.h"
+using namespace std;
 
 class FRPCManager{
 private:
-    // 缓冲区
+    // 常量设置
     static const int BIG_BUFFER_SIZE;
     static const int EVENTS_SIZE;
+
+    // 缓冲区设置
     char *forward_buffer, *backward_buffer;
     int forward_read_idx, forward_write_idx;
     int backward_read_idx, backward_write_idx;
@@ -28,36 +29,38 @@ private:
     // remote_port-->locals映射
     unordered_map<short, struct sockaddr_in>locals;
 
+// 对象的公共成员
 public:
+    // frpc的工作线程
+    FRPCManager(int ffd1, const unordered_map<short, struct sockaddr_in>&los);
+    ~FRPCManager();
     // 侦听
     int epollfd;
-    // 开始只能接收到fd1(来自父线程的构造)
-    // fd2等待后续端口号的发送来构造 因此不被包含在构造函数中
+    // 和frps建立的连接
     int fd1;
-    // 和本地建立连接 将本地的映射关系表带进去
+    // 和本地建立的连接
+    int fd2;
+    // 和本地服务建立连接
     int connect_local();
+    // 发送状态给frps
     int send_state();
-public:
-
-    // frpc的工作线程
-    FRPCManager(int ffd1, unordered_map<short, struct sockaddr_in>&los);
-    ~FRPCManager();
-
-    // frpc的连接控制
-    static void* start_frpc_routine(void* arg);
 
     // socket读写
     RET_CODE read_fd1();
     RET_CODE write_fd1();
     RET_CODE read_fd2();
     RET_CODE write_fd2();
+
+// 类的公共方法
+public:
+    static void* start_frpc_routine(void* arg);
 };
 
 // 定义
 const int FRPCManager::EVENTS_SIZE = 5;
 const int FRPCManager::BIG_BUFFER_SIZE = 65535;
 
-FRPCManager::FRPCManager(int ffd1, unordered_map<short, struct sockaddr_in>&los):
+FRPCManager::FRPCManager(int ffd1, const unordered_map<short, struct sockaddr_in>&los):
         fd1(ffd1), fd2(-1), locals(los),
         forward_read_idx(0), forward_write_idx(0),
         backward_read_idx(0), backward_write_idx(0){
@@ -74,18 +77,19 @@ FRPCManager::~FRPCManager(){
     close_file(epollfd);
 }
 
-// 每个manager结束之后可以在内部进行manager的资源回收
 void* FRPCManager::start_frpc_routine(void* arg){
     FRPCManager* manager = (FRPCManager*)arg;
     int epollfd = manager->epollfd;
-    int fd1 = manager->fd1 ,fd2;
+    int fd1 = manager->fd1, fd2;
     epoll_event events[EVENTS_SIZE]; 
     add_readfd(epollfd, fd1);
-    // LOG(INFO) << "outer: " << fd1 << " inner: " << fd2;
 
-    // 在manager内部进行与本地连接的构造
     int ret, num;
-    bool stop=false, comm_in=true, comm_out=true;
+    RET_CODE res;
+    bool stop=false;
+    // 首次侦听到读是发送过来的端口号
+    // 首次侦听到写是发送状态
+    bool comm_in=true, comm_out=true;
     while(!stop){
         int ret = epoll_wait(epollfd, events, EVENTS_SIZE, -1);
         if(ret==-1){
@@ -93,13 +97,13 @@ void* FRPCManager::start_frpc_routine(void* arg){
             exit(1);
         }
 
-        RET_CODE res;
         for(int i=0;i<ret;++i){
             //读取fd1数据 区分是开始通信还是后续的数据交互
             if(events[i].data.fd == fd1 && (events[i].events & EPOLLIN)){
                 if(comm_in){
                     // 读取发送过来的端口号并且建立和本地的连接
-                    int fd2 = manager->connect_local()
+                    fd2 = manager->connect_local();
+                    manager->fd2 = fd2;
                     if(fd2==-1){
                         stop = true;
                         break;
@@ -119,7 +123,6 @@ void* FRPCManager::start_frpc_routine(void* arg){
                         }
                         case IOERR:
                         case CLOSED:{
-                            //关闭连接交给了析构函数
                             stop=true;
                             break;
                         }
@@ -186,7 +189,6 @@ void* FRPCManager::start_frpc_routine(void* arg){
                         break;
                 }
             }
-            
             // 发送给fd2端
             else if(events[i].data.fd == fd2 && (events[i].events & EPOLLOUT)){
                 res = manager->write_fd2();
@@ -211,7 +213,7 @@ void* FRPCManager::start_frpc_routine(void* arg){
             }
             // 其他事件数据错误
             else{
-                perror("the event is is not right");
+                LOG(ERROR) <<"the event is is not right";
                 stop=true;
             }
         }
@@ -224,7 +226,7 @@ int FRPCManager::connect_local(){
     // 从socket中读取端口
     int buffer_idx=0, length=sizeof(short);
     int bytes_read=0;
-    char buffer[length];
+    char* buffer = new char[length];
     while(true){
         if(buffer_idx>length){
             LOG(ERROR) << "the buffer is not enough to save port";
@@ -233,9 +235,13 @@ int FRPCManager::connect_local(){
         bytes_read = recv(fd1, buffer+buffer_idx, length-buffer_idx, 0);
         if(bytes_read==-1){
             if(errno==EAGAIN || errno==EWOULDBLOCK) break;
-            return IOERR;
+            LOG(ERROR) << "the frps error";
+            return -1;
         }
-        else if(bytes_read==0) return CLOSED;
+        else if(bytes_read==0){
+            LOG(ERROR) << "the frps closed";
+            return -1;
+        }
         buffer_idx += bytes_read;
     }
     if(buffer_idx==0){
@@ -243,6 +249,11 @@ int FRPCManager::connect_local(){
         return -1;
     }
     short remote_port = *(short*)buffer;
+    delete []buffer;
+    if(remote_port<0){
+        LOG(ERROR) << "the remote port is negative";
+        return -1;
+    }
     
     // 建立和本地的连接 本地的地址提前弄好了，直接进行使用即可
     int local_conn = socket(PF_INET, SOCK_STREAM, 0);
@@ -250,7 +261,7 @@ int FRPCManager::connect_local(){
         LOG(ERROR) << "create local_conn socket failed";
         return -1;
     }
-    struct sockaddr_in local_addr = locals[remote_port];
+    struct sockaddr_in& local_addr = locals[remote_port];
     int ret = connect(local_conn, (struct sockaddr*)&local_addr, sizeof(local_addr));
     if(ret!=0){
         LOG(ERROR) << "connect local_port " << ntohs(local_addr.sin_port) << " failed!";
@@ -265,10 +276,11 @@ int FRPCManager::connect_local(){
 int FRPCManager::send_state(){
     int length=sizeof(short), buffer_idx=0;
     int bytes_write = 0;
-    char buffer[length];
+    char* buffer = new char[length];
     *(short*)buffer = 0;
     while(true){
         if(buffer_idx>=length){
+            delete [] buffer;
             return 0;
         }
         bytes_write = send(fd1, buffer+buffer_idx, length-buffer_idx, MSG_NOSIGNAL);
@@ -286,6 +298,7 @@ int FRPCManager::send_state(){
         }
         buffer_idx += bytes_write;
     }
+    delete [] buffer;
     return 0;    
 }
 

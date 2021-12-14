@@ -9,8 +9,6 @@
 #include "json.hpp"
 using namespace std;
 using nlohmann::json;
-
-
 INITIALIZE_EASYLOGGINGPP
 
 json parse_json(const string& cfg_file){
