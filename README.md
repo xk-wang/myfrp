@@ -24,7 +24,7 @@ run frpc on your internal network machine
 ### todo list
 - [x] heart beating support
 - [x] logging support
-- [ ] more than one service port support
+- [x] more than one service port support
 - [ ] more frpc clients connected to frps support
 - [ ] local port forwarding
 - [ ] support https parsing
